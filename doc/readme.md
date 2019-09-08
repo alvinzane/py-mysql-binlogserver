@@ -3,7 +3,8 @@
 ## MySQL protocol
 ```
 3   length
-1   type
+1   SequenceId
+1   type: 00 OK packet or others without error
 
 ```
 
@@ -14,15 +15,21 @@
 
 ### Binlog event
 ```sql
-
-# 1 OK value
-# 4 timestamp
-# 1 event_type
-# 4 server_id
-# 4 log_pos
-# 2 flags
+1 OK value
+4 timestamp
+1 event_type
+4 server_id
+4 log_pos
+2 flags
 unpack = struct.unpack('<cIcIIIH', packet[4:24])
 ```
 
+### semi ack
+```sql
+1 0xef kPacketMagicNum
+8 log_pos
+n binlog_filename
+
+```
 ##  参加文档
 -  https://docs.python.org/2/library/struct.html
