@@ -38,9 +38,9 @@ dump_my_packet(buf)
 
 
 dump = SemiAck("mysql-bin.000007", 4)
-slave.sequenceId = 0
+dump.sequenceId = 0
 # dump_my_packet(slave)
-buf = dump.getPayload()
+buf = dump.toPacket()
 
 print(buf)
 dump_my_packet(buf)

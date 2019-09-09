@@ -31,8 +31,6 @@ def get_socket(host='127.0.0.1', port=3306, user="", password="", schema=""):
     challenge2 = challenge.challenge2
 
     scramble_password = scramble_native_password(password, challenge1 + challenge2)
-    # packet = file2packet("auth_reply.cap")
-    # response = Response.loadFromPacket(packet)
     response = Response()
     response.sequenceId = 1
     response.capabilityFlags = 33531397

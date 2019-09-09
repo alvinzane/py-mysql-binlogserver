@@ -35,8 +35,6 @@ def get_socket(host='127.0.0.1', port=3306, user="", password="", schema=""):
     challenge2 = challenge.challenge2
 
     scramble_password = scramble_native_password(password, challenge1 + challenge2)
-    # packet = file2packet("auth_reply.cap")
-    # response = Response.loadFromPacket(packet)
     response = Response()
     response.sequenceId = 1
     response.capabilityFlags = 33531397
@@ -114,7 +112,7 @@ def read_binlog(skt):
         dump_my_packet(packet)
 
         if event_type == 16:
-            ack = SemiAck("mysql-bin.000009", log_pos)
+            ack = SemiAck("mysql-bin.000001", log_pos)
             ack.sequenceId = 0
             packet = ack.toPacket()
             send_socket(skt, packet)
@@ -137,7 +135,7 @@ def send_socket(skt, buff):
 
 
 if __name__ == "__main__":
-    s = get_socket(host="192.168.1.101", user="admin", password="aaaaaa", schema="mysql")
+    s = get_socket(host="192.168.1.100", user="admin", password="aaaaaa", schema="mysql")
 
     sql = Query()
     sql.sequenceId = 0
@@ -175,7 +173,7 @@ if __name__ == "__main__":
     read_packet(s)
 
     # dump = DumpPos(3306100, "mysql-bin.000007", 3122)
-    dump = DumpGtid(3306202, "ba66414c-d10d-11e9-b4b0-0800275ae9e7:1-19,f0ea18e0-3cff-11e9-9488-0800275ae9e7:1-24")
+    dump = DumpGtid(3306202, "f0ea18e0-3cff-11e9-9488-0800275ae9e7:1-5")
     dump.sequenceId = 0
     packet = dump.getPayload()
     send_socket(s, packet)
