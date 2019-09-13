@@ -1,8 +1,6 @@
 py-mysql-binlogserver
 =====================
 
-.. contents:: Table of Contents
-   :local:
 
 This package is a pure-Python MySQL BinlogServer which implemented mysql semi sync replication protocol.
 
@@ -63,4 +61,4 @@ if __name__ == "__main__":
 License
 -------
 
-py-mysql-binlogserver is released under the MIT License. See LICENSE for more information.
+py-mysql-binlogserver is released under the MIT License.
