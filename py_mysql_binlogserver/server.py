@@ -324,7 +324,7 @@ class BinlogServer(BaseStream):
     def run(self):
 
         fw = self._init_binlog_file()
-        binlog_reader = BinLogReaderStream(connection_settings,
+        binlog_reader = BinLogReaderStream(self._connection_settings,
                                            log_file=self._log_file,
                                            log_pos=self._log_pos
                                            )
