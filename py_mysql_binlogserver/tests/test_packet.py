@@ -1,10 +1,10 @@
 import unittest
 
-from py_mysql_binlogserver.auth.dump_gtid import DumpGtid
-from py_mysql_binlogserver.auth.semiack import SemiAck
-from py_mysql_binlogserver.auth.slave import Slave
-from py_mysql_binlogserver.lib.err import ERR
-from py_mysql_binlogserver.lib.packet import dump_my_packet
+from py_mysql_binlogserver.packet.dump_gtid import DumpGtid
+from py_mysql_binlogserver.packet.semiack import SemiAck
+from py_mysql_binlogserver.packet.slave import Slave
+from py_mysql_binlogserver.protocol.err import ERR
+from py_mysql_binlogserver.protocol.packet import dump_my_packet
 
 __all__ = ["TestPacket"]
 

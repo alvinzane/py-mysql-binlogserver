@@ -3,19 +3,18 @@ import os
 import socket
 import struct
 
-from py_mysql_binlogserver.auth.dump_gtid import DumpGtid
-from py_mysql_binlogserver.auth.semiack import SemiAck
-from py_mysql_binlogserver.auth.slave import Slave
-from py_mysql_binlogserver.com.query import Query
-from pymysql.util import byte2int
-
-from py_mysql_binlogserver.auth.challenge import Challenge
-from py_mysql_binlogserver.auth.response import Response
-from py_mysql_binlogserver.lib import Flags
-from py_mysql_binlogserver.lib.Flags import header_name
-from py_mysql_binlogserver.lib.err import ERR
-from py_mysql_binlogserver.lib.packet import read_server_packet, getSequenceId, getType, getSize
-from py_mysql_binlogserver.lib.proto import scramble_native_password
+from mysql_piper.com.query import Query
+from py_mysql_binlogserver.packet.dump_gtid import DumpGtid
+from py_mysql_binlogserver.packet.dump_pos import DumpPos
+from py_mysql_binlogserver.packet.semiack import SemiAck
+from py_mysql_binlogserver.packet.slave import Slave
+from py_mysql_binlogserver.packet.challenge import Challenge
+from py_mysql_binlogserver.packet.response import Response
+from py_mysql_binlogserver.protocol import Flags
+from py_mysql_binlogserver.protocol.Flags import header_name
+from py_mysql_binlogserver.protocol.err import ERR
+from py_mysql_binlogserver.protocol.packet import read_server_packet, getSequenceId, getType, getSize
+from py_mysql_binlogserver.protocol.proto import scramble_native_password, byte2int
 
 
 class BinLogStreamReader(object):
@@ -23,35 +22,42 @@ class BinLogStreamReader(object):
     """
     report_slave = None
 
-    def __init__(self, connection_settings, server_id):
+    def __init__(self, connection_settings, log_file=None, log_pos=None, auto_position=None):
         self.__connected_stream = None
         self.__connection_settings = connection_settings
-        self.server_id = server_id
-
-        pass
+        self.__log_file = log_file
+        self.__log_pos = log_pos
+        self.__auto_position = auto_position
+        self.__has_register_slave = False
+        if connection_settings["semi_sync"]:
+            self.__binlog_header_fix_length = 7  # 4 + 1 + 2, packet header + command + semi sycn magic number
+        else:
+            self.__binlog_header_fix_length = 5  # 4 + 1, packet header + command
 
     def _read_packet(self):
-        skt = self.__connected_stream
-        while True:
-            packet = read_server_packet(skt)
-            # sequenceId = getSequenceId(packet)
-            packetType = getType(packet)
+        """
+        Reads a packet from a socket
+        """
+        socket_in = self.__connected_stream
+        # Read the size of the packet
+        psize = bytearray(3)
+        socket_in.recv_into(psize, 3)
 
-            if packetType == Flags.ERR:
-                buf = ERR.loadFromPacket(packet)
-                print("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
-                skt.close()
-                exit(1)
-                break
+        size = getSize(psize) + 1
 
-            if packetType == Flags.EOF or packetType == Flags.OK:
-                break
+        # Read the rest of the packet
+        packet_payload = bytearray(size)
+        socket_in.recv_into(packet_payload, size)
 
-            return packet
+        # Combine the chunks
+        psize.extend(packet_payload)
+        BinLogStreamReader.dump_packet(psize)
+        return psize
 
     def _send_packet(self, buff):
         skt = self.__connected_stream
         skt.sendall(buff)
+        BinLogStreamReader.dump_packet(buff)
 
     @staticmethod
     def dump_packet(packet):
@@ -102,15 +108,18 @@ class BinLogStreamReader(object):
 
     def get_socket(self):
 
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         host = self.__connection_settings["host"]
         port = self.__connection_settings["port"]
         user = self.__connection_settings["user"]
         password = self.__connection_settings["password"]
         schema = ""
-        s.connect((host, port))
+        conn.connect((host, port))
+        self.__connected_stream = conn
 
-        packet = read_server_packet(s)
+        packet = self._read_packet()
+        # print("== Greeting ==")
+        # print(BinLogStreamReader.dump_packet(packet))
 
         challenge = Challenge.loadFromPacket(packet)
 
@@ -138,13 +147,9 @@ class BinLogStreamReader(object):
         packet = response.toPacket()
         self._send_packet(packet)
 
-        packet = read_server_packet(s)
+        packet = read_server_packet(conn)
         if __debug__:
-            print(dump_packet(packet))
-
-        self.__connected_stream = s
-
-        return s
+            print(BinLogStreamReader.dump_packet(packet))
 
     def close(self):
         self.__connected_stream.close()
@@ -157,37 +162,45 @@ class BinLogStreamReader(object):
         if not self.__connected_stream:
             self.get_socket()
 
+        master_id = self.__connection_settings["master_id"]
+        port = self.__connection_settings["port"]
+        server_id = self.__connection_settings["server_id"]
+        server_uuid = self.__connection_settings["server_uuid"]
+        heartbeat_period = self.__connection_settings["heartbeat_period"]
+
         sql = Query()
         sql.sequenceId = 0
-        sql.query = "SET @slave_uuid= '8efa8f0a-d128-11e9-952d-0800275ae9e8'"
+        sql.query = "SET @slave_uuid= '%s'" % server_uuid
         packet = sql.toPacket()
         self._send_packet(packet)
         self._read_packet()
 
-        # 不用hearbeat会从第一个event开始传送
         sql = Query()
         sql.sequenceId = 0
-        sql.query = "SET @master_heartbeat_period= 30000001024"
+        sql.query = "SET @master_heartbeat_period= %d" % heartbeat_period
         packet = sql.toPacket()
         self._send_packet(packet)
         self._read_packet()
 
-        slave = Slave("", '', '', 3306, 3306100, 3306202)
+        slave = Slave("", '', '', port, master_id, server_id)
         slave.sequenceId = 0
         packet = slave.getPayload()
         self._send_packet(packet)
         self._read_packet()
 
-        # 使用增强半同步后，binlog的packet格式会产生变化
-        sql = Query()
-        sql.sequenceId = 0
-        sql.query = "SET @rpl_semi_sync_slave= 1"
-        packet = sql.toPacket()
-        self._send_packet(packet)
-        self._read_packet()
+        # 是否启用半同步
+        if self.__connection_settings["semi_sync"]:
+            sql = Query()
+            sql.sequenceId = 0
+            sql.query = "SET @rpl_semi_sync_slave= 1"
+            packet = sql.toPacket()
+            self._send_packet(packet)
+            self._read_packet()
 
-        # dump = DumpPos(3306100, "mysql-bin.000007", 3122)
-        dump = DumpGtid(3306202, "f0ea18e0-3cff-11e9-9488-0800275ae9e7:1-5")
+        if self.__auto_position:
+            dump = DumpGtid(server_id, self.__auto_position)
+        else:
+            dump = DumpPos(server_id, self.__log_file, self.__log_pos)
         dump.sequenceId = 0
         packet = dump.getPayload()
         self._send_packet(packet)
@@ -206,25 +219,22 @@ class BinLogStreamReader(object):
             sequenceId = getSequenceId(packet)
             packetType = getType(packet)
 
-            # OK value
-            # timestamp
-            # event_type
-            # server_id
-            # log_pos
-            # flags
-            unpack = struct.unpack('<cIcIIIH', packet[6:26])
-
+            unpack = struct.unpack('<IcIIIH',
+                                   packet[self.__binlog_header_fix_length:self.__binlog_header_fix_length + 19])
             # Header
-            timestamp = unpack[1]
-            event_type = byte2int(unpack[2])
-            server_id = unpack[3]
-            event_size = unpack[4]
-            # position of the next event
-            log_pos = unpack[5]
-            flags = unpack[6]
+            timestamp = unpack[0]
+            event_type = byte2int(unpack[1])
+            server_id = unpack[2]
+            event_size = unpack[3]
+            log_pos = unpack[4]
+            flags = unpack[5]
+
+            # 跳过HEARTBEAT_EVENT
+            if event_type == 27:
+                continue
 
             if event_type == 16:
-                ack = SemiAck("mysql-bin.000001", log_pos)
+                ack = SemiAck(self.__log_file, log_pos)
                 ack.sequenceId = 0
                 acp_packet = ack.toPacket()
                 self._send_packet(acp_packet)
@@ -235,11 +245,7 @@ class BinLogStreamReader(object):
                 self.close()
                 exit(1)
                 break
-
-            if packetType == Flags.EOF or packetType == Flags.OK:
-                break
-
-            return packet
+            return (timestamp, event_type, event_size, log_pos), packet[self.__binlog_header_fix_length:]
 
     def __iter__(self):
         return iter(self.fetchone, None)
