@@ -1,7 +1,9 @@
 import os
 import socket
 import struct
+from os.path import isfile
 
+from py_mysql_binlogserver.constants.EVENT_TYPE import HEARTBEAT_EVENT, XID_EVENT, ROTATE_EVENT
 from py_mysql_binlogserver.packet.challenge import Challenge
 from py_mysql_binlogserver.packet.dump_gtid import DumpGtid
 from py_mysql_binlogserver.packet.dump_pos import DumpPos
@@ -42,6 +44,14 @@ class BaseStream(object):
 
         # Combine the chunks
         psize.extend(packet_payload)
+        packetType = getType(psize)
+
+        if packetType == Flags.ERR:
+            buf = ERR.loadFromPacket(psize)
+            print("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
+            self.close()
+            exit(1)
+
         return psize
 
     def _send_packet(self, buff):
@@ -94,42 +104,6 @@ class BaseStream(object):
 
     def close(self):
         self._connection.close()
-
-
-class BinlogServer(BaseStream):
-    """
-    dump binlog into file from master
-    """
-
-    def __init__(self, connection_settings):
-        super().__init__(connection_settings)
-        self._get_last_logfile()
-        self._get_last_logpos()
-
-    def _get_last_logfile(self):
-        log_file = "mysql-bin.000001"
-        self._log_file = log_file
-        return log_file
-
-    def _get_last_logpos(self):
-        self._log_pos = 4
-
-    def run(self):
-
-        fw = open(self._log_file, 'wb')
-        fw.write(bytes.fromhex('fe62696e'))
-
-        stream_reader = BinLogReaderStream(connection_settings,
-                                           log_file=self._log_file,
-                                           log_pos=self._log_pos
-                                           )
-        for (timestamp, event_type, event_size, log_pos), packet in stream_reader:
-            print(timestamp, event_type, event_size, log_pos)
-            dump_my_packet(packet)
-            fw.write(packet)
-            fw.flush()
-            if log_pos > 2200:
-                break
 
 
 class BinLogReaderStream(BaseStream):
@@ -191,6 +165,7 @@ class BinLogReaderStream(BaseStream):
         if self.__auto_position:
             dump = DumpGtid(server_id, self.__auto_position)
         else:
+            print("Dump binlog from %s at %d" % (self.__log_file, self.__log_pos))
             dump = DumpPos(server_id, self.__log_file, self.__log_pos)
         dump.sequenceId = 0
         packet = dump.getPayload()
@@ -218,14 +193,16 @@ class BinLogReaderStream(BaseStream):
             flags = unpack[5]
 
             # 跳过HEARTBEAT_EVENT
-            if event_type == 27:
+            if event_type == HEARTBEAT_EVENT:
                 continue
 
-            if event_type == 16:
-                ack = SemiAck(self.__log_file, log_pos)
-                ack.sequenceId = 0
-                acp_packet = ack.toPacket()
-                self._send_packet(acp_packet)
+            # Send SemiAck after xid event
+            if self._connection_settings["semi_sync"]:
+                if event_type == XID_EVENT:
+                    ack = SemiAck(self.__log_file, log_pos)
+                    ack.sequenceId = 0
+                    acp_packet = ack.toPacket()
+                    self._send_packet(acp_packet)
 
             if packetType == Flags.ERR:
                 buf = ERR.loadFromPacket(packet)
@@ -237,6 +214,135 @@ class BinLogReaderStream(BaseStream):
 
     def __iter__(self):
         return iter(self.fetchone, None)
+
+
+class BinlogServer(BaseStream):
+    """
+    dump binlog into file from master
+    """
+
+    _log_file = None
+    _log_pos = 4
+
+    def __init__(self, connection_settings):
+        super().__init__(connection_settings)
+        if "binlog_dir" in connection_settings.keys() and connection_settings["binlog_dir"]:
+            self._binlog_dir = connection_settings["binlog_dir"]
+        else:
+            self._binlog_dir = os.path.dirname(__file__) + '/binlogs/'
+        if not os.path.isdir(self._binlog_dir):
+            os.makedirs(self._binlog_dir)
+
+        self._last_logfile_path = self._binlog_dir + "_last_logfile"
+
+        self._set_last_logfile()
+        self._set_last_logpos()
+
+    def _set_last_logfile(self):
+        if os.path.isfile(self._last_logfile_path):
+            with open(self._last_logfile_path, "r", ) as f:
+                self._log_file = f.readline()
+        else:
+            self._log_file = "mysql-bin.000001"
+
+    def _save_last_logfile(self, logfile):
+
+        with open(self._last_logfile_path, "w",) as f:
+            f.write(logfile)
+
+    def _set_last_logpos(self):
+        """
+        https://dev.mysql.com/doc/internals/en/event-structure.html
+        +=====================================+
+        | event  | timestamp         0 : 4    |
+        | header +----------------------------+
+        |        | type_code         4 : 1    |
+        |        +----------------------------+
+        |        | server_id         5 : 4    |
+        |        +----------------------------+
+        |        | event_length      9 : 4    |
+        |        +----------------------------+
+        |        | next_position    13 : 4    |
+        |        +----------------------------+
+        |        | flags            17 : 2    |
+        |        +----------------------------+
+        |        | extra_headers    19 : x-19 |
+        +=====================================+
+        | event  | fixed part        x : y    |
+        | data   +----------------------------+
+        |        | variable part              |
+        +=====================================+
+        """
+        if not isfile(self._get_cur_binlog_file()):
+            self._log_pos = 4
+        else:
+            with open(self._get_cur_binlog_file(), "rb", ) as f:
+                f.read(4)       # file header
+                while True:
+                    if len(f.read(4 + 1 + 4)) == 0:
+                        if next_position > 0:
+                            self._log_pos = next_position
+                        break
+                    event_length = struct.unpack("<I", f.read(4))[0]
+                    next_position = struct.unpack("<I", f.read(4))[0]
+                    f.read(2)
+                    f.read(event_length - 19)
+                    # print("next_position:", next_position)
+
+    def _get_cur_binlog_file(self):
+        return self._binlog_dir + "/" + self._log_file
+
+    def _get_rotate_log_file(self, packet):
+
+        """
+        0 4 43 0
+        Length: 0, SequenceId: 0, Header: =4
+        00000000  00 00 00 00 04 74 72 32  00 2B 00 00 00 00 00 00   .....tr2 .+......
+        00000010  00 20 00 04 00 00 00 00  00 00 00 6D 79 73 71 6C   . ...... ...mysql
+        00000020  2D 62 69 6E 2E 30 30 30  30 30 32                  -bin.000 002
+        """
+
+        value = ""
+        for i in range(27, len(packet)):
+            if packet[i] == 0x00:
+                break
+            value += chr(packet[i])
+        self._log_file = value
+
+        return value
+
+    def _init_binlog_file(self, log_file=None):
+        if log_file:
+            self._log_file = log_file
+        if not isfile(self._get_cur_binlog_file()):
+            fw = open(self._get_cur_binlog_file(), 'wb')
+            fw.write(bytes.fromhex('fe62696e'))
+        else:
+            fw = open(self._get_cur_binlog_file(), 'ab')
+        return fw
+
+    def run(self):
+
+        fw = self._init_binlog_file()
+        binlog_reader = BinLogReaderStream(connection_settings,
+                                           log_file=self._log_file,
+                                           log_pos=self._log_pos
+                                           )
+        for (timestamp, event_type, event_size, log_pos), packet in binlog_reader:
+            print(timestamp, event_type, event_size, log_pos)
+            dump_my_packet(packet)
+            fw.write(packet)
+            fw.flush()
+            if event_type == ROTATE_EVENT:
+                self._save_last_logfile(self._log_file)
+                fw.close()
+                new_log_file = self._get_rotate_log_file(packet)
+                print(new_log_file)
+                fw = self._init_binlog_file(log_file=new_log_file)
+                ## TODO flush logs后，增强半同步会中断
+
+            # if log_pos > 2200:
+            #     break
 
 
 if __name__ == "__main__":
