@@ -1,4 +1,5 @@
-
+#!/usr/bin/env python
+# coding=utf-8
 
 HEARTBEAT_EVENT = 0x1b
 
@@ -25,16 +26,26 @@ TABLE_MAP_EVENT = 19
 PRE_GA_WRITE_ROWS_EVENT = 20
 PRE_GA_UPDATE_ROWS_EVENT = 21
 PRE_GA_DELETE_ROWS_EVENT = 22
-WRITE_ROWS_EVENT = 23
-UPDATE_ROWS_EVENT = 24
-DELETE_ROWS_EVENT = 25
+# WRITE_ROWS_EVENT = 23
+# UPDATE_ROWS_EVENT = 24
+# DELETE_ROWS_EVENT = 25
 INCIDENT_EVENT = 26
 HEARTBEAT_LOG_EVENT = 27
 IGNORABLE_LOG_EVENT = 28
 ROWS_QUERY_LOG_EVENT = 29
-# WRITE_ROWS_EVENT = 30
-# UPDATE_ROWS_EVENT = 31
-# DELETE_ROWS_EVENT = 32
+WRITE_ROWS_EVENT = 30
+UPDATE_ROWS_EVENT = 31
+DELETE_ROWS_EVENT = 32
 GTID_LOG_EVENT = 33
 ANONYMOUS_GTID_LOG_EVENT = 34
 PREVIOUS_GTIDS_LOG_EVENT = 35
+
+local_vars = locals()
+
+
+def event_type_name():
+    event_map = {}
+    for _var in local_vars:
+        if "_EVENT" in _var:
+            event_map[local_vars[_var]] = _var
+    return event_map

@@ -1,9 +1,11 @@
+import logging
 import os
 import socket
 import struct
 from os.path import isfile
 
-from py_mysql_binlogserver.constants.EVENT_TYPE import HEARTBEAT_EVENT, XID_EVENT, ROTATE_EVENT
+from py_mysql_binlogserver.constants.EVENT_TYPE import HEARTBEAT_EVENT, XID_EVENT, ROTATE_EVENT, event_type_name, \
+    QUERY_EVENT
 from py_mysql_binlogserver.packet.challenge import Challenge
 from py_mysql_binlogserver.packet.dump_gtid import DumpGtid
 from py_mysql_binlogserver.packet.dump_pos import DumpPos
@@ -13,7 +15,7 @@ from py_mysql_binlogserver.packet.semiack import SemiAck
 from py_mysql_binlogserver.packet.slave import Slave
 from py_mysql_binlogserver.protocol import Flags
 from py_mysql_binlogserver.protocol.err import ERR
-from py_mysql_binlogserver.protocol.packet import getSize, getType, getSequenceId, dump_my_packet
+from py_mysql_binlogserver.protocol.packet import getSize, getType, getSequenceId, dump_my_packet, dump
 from py_mysql_binlogserver.protocol.proto import scramble_native_password, byte2int
 
 
@@ -21,11 +23,13 @@ class BaseStream(object):
     """
     dump binlog into file from master
     """
+    global logger
 
     def __init__(self, connection_settings):
         self._connection = None
         self._connection_settings = connection_settings
         self.get_conn()
+        self.eventmap = event_type_name()
 
     def _read_packet(self):
         """
@@ -48,7 +52,7 @@ class BaseStream(object):
 
         if packetType == Flags.ERR:
             buf = ERR.loadFromPacket(psize)
-            print("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
+            logger.error("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
             self.close()
             exit(1)
 
@@ -98,7 +102,7 @@ class BaseStream(object):
 
         if packetType == Flags.ERR:
             buf = ERR.loadFromPacket(_packet)
-            print("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
+            logger.error("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
             self.close()
             exit(1)
 
@@ -121,6 +125,9 @@ class BinLogReaderStream(BaseStream):
             self.__binlog_header_fix_length = 7  # 4 + 1 + 2, packet header + command + semi sycn magic number
         else:
             self._binlog_header_fix_length = 5  # 4 + 1, packet header + command
+
+    def set_log_file(self, log_file):
+        self.__log_file = log_file
 
     def _register_slave(self):
 
@@ -165,7 +172,7 @@ class BinLogReaderStream(BaseStream):
         if self.__auto_position:
             dump = DumpGtid(server_id, self.__auto_position)
         else:
-            print("Dump binlog from %s at %d" % (self.__log_file, self.__log_pos))
+            logger.info("Dump binlog from %s at %d" % (self.__log_file, self.__log_pos))
             dump = DumpPos(server_id, self.__log_file, self.__log_pos)
         dump.sequenceId = 0
         packet = dump.getPayload()
@@ -198,7 +205,7 @@ class BinLogReaderStream(BaseStream):
 
             # Send SemiAck after xid event
             if self._connection_settings["semi_sync"]:
-                if event_type == XID_EVENT:
+                if event_type in (XID_EVENT, QUERY_EVENT):
                     ack = SemiAck(self.__log_file, log_pos)
                     ack.sequenceId = 0
                     acp_packet = ack.toPacket()
@@ -206,7 +213,7 @@ class BinLogReaderStream(BaseStream):
 
             if packetType == Flags.ERR:
                 buf = ERR.loadFromPacket(packet)
-                print("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
+                logger.error("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
                 self.close()
                 exit(1)
 
@@ -234,6 +241,7 @@ class BinlogServer(BaseStream):
             os.makedirs(self._binlog_dir)
 
         self._last_logfile_path = self._binlog_dir + "_last_logfile"
+        self.binlog_reader = None
 
         self._set_last_logfile()
         self._set_last_logpos()
@@ -277,17 +285,16 @@ class BinlogServer(BaseStream):
             self._log_pos = 4
         else:
             with open(self._get_cur_binlog_file(), "rb", ) as f:
-                f.read(4)       # file header
+                next_position = 4
+                f.read(next_position)       # file header
                 while True:
                     if len(f.read(4 + 1 + 4)) == 0:
-                        if next_position > 0:
-                            self._log_pos = next_position
                         break
                     event_length = struct.unpack("<I", f.read(4))[0]
                     next_position = struct.unpack("<I", f.read(4))[0]
                     f.read(2)
                     f.read(event_length - 19)
-                    # print("next_position:", next_position)
+                    logger.debug("next_position: %s" % next_position)
 
     def _get_cur_binlog_file(self):
         return self._binlog_dir + "/" + self._log_file
@@ -315,37 +322,49 @@ class BinlogServer(BaseStream):
         if log_file:
             self._log_file = log_file
         if not isfile(self._get_cur_binlog_file()):
-            fw = open(self._get_cur_binlog_file(), 'wb')
+            fw = open(self._get_cur_binlog_file(), 'ab')
             fw.write(bytes.fromhex('fe62696e'))
         else:
             fw = open(self._get_cur_binlog_file(), 'ab')
         return fw
 
+    def close(self):
+        self._connection.close()
+        self.binlog_reader.close()
+
     def run(self):
 
         fw = self._init_binlog_file()
-        binlog_reader = BinLogReaderStream(self._connection_settings,
-                                           log_file=self._log_file,
-                                           log_pos=self._log_pos
+        self.binlog_reader = BinLogReaderStream(self._connection_settings,
+                                                log_file=self._log_file,
+                                                log_pos=self._log_pos
                                            )
-        for (timestamp, event_type, event_size, log_pos), packet in binlog_reader:
-            print(timestamp, event_type, event_size, log_pos)
-            dump_my_packet(packet)
+        for (timestamp, event_type, event_size, log_pos), packet in self.binlog_reader:
+            logger.info("Received Event[%s]: [%s] %s %s %s" % (timestamp,
+                                                               event_type,
+                                                               self.eventmap.get(event_type),  event_size, log_pos))
+            dump(packet)
             fw.write(packet)
             fw.flush()
             if event_type == ROTATE_EVENT:
                 self._save_last_logfile(self._log_file)
                 fw.close()
                 new_log_file = self._get_rotate_log_file(packet)
-                print(new_log_file)
+                logger.info("Rotate new binlog file: %s" % new_log_file)
                 fw = self._init_binlog_file(log_file=new_log_file)
-                ## TODO flush logs后，增强半同步会中断
+                self.binlog_reader.set_log_file(new_log_file)
 
             # if log_pos > 2200:
             #     break
 
 
 if __name__ == "__main__":
+
+    FORMAT = "%(asctime)s %(message)s"
+    logging.basicConfig(format=FORMAT)
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
     connection_settings = {
         "host": "192.168.1.100",
         "port": 3306,
@@ -357,6 +376,15 @@ if __name__ == "__main__":
         "server_uuid": "a721031c-d2c1-11e9-897c-080027adb7d7",
         "heartbeat_period": 30000001024
     }
+    logger.info("Start Binlog Server from %s: %s" % (connection_settings['host'], connection_settings['port']))
 
-    server = BinlogServer(connection_settings)
-    server.run()
+    try:
+        server = BinlogServer(connection_settings)
+        server.run()
+    except KeyboardInterrupt:
+        logger.info("Stop Binlog Server from %s: %s at %s %s" % (connection_settings['host'],
+                                                                 connection_settings['port'],
+                                                                 server._log_file,
+                                                                 server._log_pos,
+                                                                 ))
+        server.close()

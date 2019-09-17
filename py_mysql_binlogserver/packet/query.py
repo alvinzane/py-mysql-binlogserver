@@ -1,8 +1,7 @@
 # coding=utf-8
-
-from mysql_piper.lib import Flags
-from mysql_piper.lib.packet import Packet
-from mysql_piper.lib.proto import Proto
+from py_mysql_binlogserver.protocol import Flags
+from py_mysql_binlogserver.protocol.packet import Packet
+from py_mysql_binlogserver.protocol.proto import Proto
 
 
 class Query(Packet):
