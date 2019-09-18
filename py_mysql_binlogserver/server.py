@@ -5,7 +5,7 @@ import struct
 from os.path import isfile
 
 from py_mysql_binlogserver.constants.EVENT_TYPE import HEARTBEAT_EVENT, XID_EVENT, ROTATE_EVENT, event_type_name, \
-    QUERY_EVENT
+    QUERY_EVENT, FORMAT_DESCRIPTION_EVENT
 from py_mysql_binlogserver.packet.challenge import Challenge
 from py_mysql_binlogserver.packet.dump_gtid import DumpGtid
 from py_mysql_binlogserver.packet.dump_pos import DumpPos
@@ -17,6 +17,8 @@ from py_mysql_binlogserver.protocol import Flags
 from py_mysql_binlogserver.protocol.err import ERR
 from py_mysql_binlogserver.protocol.packet import getSize, getType, getSequenceId, dump_my_packet, dump
 from py_mysql_binlogserver.protocol.proto import scramble_native_password, byte2int
+
+logger = logging.getLogger()
 
 
 class BaseStream(object):
@@ -203,6 +205,10 @@ class BinLogReaderStream(BaseStream):
             if event_type == HEARTBEAT_EVENT:
                 continue
 
+            # 跳过重启后的第一个 FORMAT_DESCRIPTION_EVENT
+            if event_type == FORMAT_DESCRIPTION_EVENT and log_pos == 0:
+                continue
+
             # Send SemiAck after xid event
             if self._connection_settings["semi_sync"]:
                 if event_type in (XID_EVENT, QUERY_EVENT):
@@ -284,17 +290,19 @@ class BinlogServer(BaseStream):
         if not isfile(self._get_cur_binlog_file()):
             self._log_pos = 4
         else:
+            logger.debug("Parse last log pos from %s" % self._get_cur_binlog_file())
             with open(self._get_cur_binlog_file(), "rb", ) as f:
                 next_position = 4
                 f.read(next_position)       # file header
                 while True:
-                    if len(f.read(4 + 1 + 4)) == 0:
+                    if len(f.read(4 + 1 + 4)) < 8:
                         break
                     event_length = struct.unpack("<I", f.read(4))[0]
                     next_position = struct.unpack("<I", f.read(4))[0]
                     f.read(2)
                     f.read(event_length - 19)
-                    logger.debug("next_position: %s" % next_position)
+                    # logger.debug("next_position: %s" % next_position)
+                    self._log_pos = next_position
 
     def _get_cur_binlog_file(self):
         return self._binlog_dir + "/" + self._log_file
@@ -346,6 +354,7 @@ class BinlogServer(BaseStream):
             dump(packet)
             fw.write(packet)
             fw.flush()
+            self._log_pos = log_pos
             if event_type == ROTATE_EVENT:
                 self._save_last_logfile(self._log_file)
                 fw.close()
