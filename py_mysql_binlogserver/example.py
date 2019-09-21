@@ -1,5 +1,5 @@
 import logging
-from py_mysql_binlogserver.server import BinlogServer
+from py_mysql_binlogserver.dumper import BinlogDumper
 
 
 def main():
@@ -19,18 +19,18 @@ def main():
         "server_uuid": "a721031c-d2c1-11e9-897c-080027adb7d7",
         "heartbeat_period": 30000001024
     }
-    logger.info("Start Binlog Server from %s: %s" % (connection_settings['host'], connection_settings['port']))
+    logger.info("Start Binlog Dumper from %s: %s" % (connection_settings['host'], connection_settings['port']))
 
     try:
-        server = BinlogServer(connection_settings)
-        server.run()
+        client = BinlogDumper(connection_settings)
+        client.run()
     except KeyboardInterrupt:
-        logger.info("Stop Binlog Server from %s: %s at %s %s" % (connection_settings['host'],
+        logger.info("Stop Binlog Dumper from %s: %s at %s %s" % (connection_settings['host'],
                                                                  connection_settings['port'],
-                                                                 server._log_file,
-                                                                 server._log_pos,
+                                                                 client._log_file,
+                                                                 client._log_pos,
                                                                  ))
-        server.close()
+        client.close()
 
 
 if __name__ == "__main__":

@@ -337,6 +337,13 @@ abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123abc123\
         """
         self.offset += size
 
+    def read(self, size):
+
+        value = self.packet[self.offset:self.offset+size]
+        self.offset += size
+
+        return value
+
     def get_lenenc_int(self):
         """
         Extract a Length Encoded Int from the current packet position

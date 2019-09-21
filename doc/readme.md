@@ -33,3 +33,4 @@ n binlog_filename
 ```
 ##  参加文档
 -  https://docs.python.org/2/library/struct.html
+-  https://dev.mysql.com/doc/internals/en/binlog-event-header.html
