@@ -1,44 +1,136 @@
+# coding=utf-8
 import logging
 import os
-import socket
+import socketserver
 import struct
-from os.path import isfile
+import threading
 
-from py_mysql_binlogserver.constants.EVENT_TYPE import HEARTBEAT_EVENT, XID_EVENT, ROTATE_EVENT, event_type_name, \
-    QUERY_EVENT, FORMAT_DESCRIPTION_EVENT
+from py_mysql_binlogserver.constants.EVENT_TYPE import event_type_name, GTID_LOG_EVENT
 from py_mysql_binlogserver.packet.challenge import Challenge
-from py_mysql_binlogserver.packet.dump_gtid import DumpGtid
-from py_mysql_binlogserver.packet.dump_pos import DumpPos
-from py_mysql_binlogserver.packet.query import Query
+from py_mysql_binlogserver.packet.gtid_event import GitdEvent
 from py_mysql_binlogserver.packet.response import Response
-from py_mysql_binlogserver.packet.semiack import SemiAck
-from py_mysql_binlogserver.packet.slave import Slave
 from py_mysql_binlogserver.protocol import Flags
 from py_mysql_binlogserver.protocol.err import ERR
-from py_mysql_binlogserver.protocol.packet import getSize, getType, getSequenceId, dump_my_packet, dump
-from py_mysql_binlogserver.protocol.proto import scramble_native_password, byte2int
+from py_mysql_binlogserver.protocol.ok import OK
+from py_mysql_binlogserver.protocol.packet import getSize, getType, dump_my_packet
+from py_mysql_binlogserver.protocol.proto import scramble_native_password
 
+SocketServer = socketserver
+connection_counter = 0
 logger = logging.getLogger()
 
 
-class BaseStream(object):
-    """
-    dump binlog into file from master
-    """
-    global logger
+class BinlogGTIDReader(object):
+
+    _start_log_file = None
+    _start_log_pos = 4
 
     def __init__(self, connection_settings):
-        self._connection = None
-        self._connection_settings = connection_settings
-        self.get_conn()
+        if "binlog_dir" in connection_settings.keys() and connection_settings["binlog_dir"]:
+            self._binlog_dir = connection_settings["binlog_dir"]
+        else:
+            self._binlog_dir = os.path.dirname(__file__) + '/binlogs/'
+        if not os.path.isdir(self._binlog_dir):
+            # TODO rise a error
+            pass
+        self._binlog_name = connection_settings["binlog_name"]
         self.eventmap = event_type_name()
 
-    def _read_packet(self):
+    def find_log_pos_by_gtid(self, gtid_set):
+        gtid_index_file = "%s/%s.gtid.index" % (self._binlog_dir, self._binlog_name)
+        gtid, gno = gtid_set.split(":")
+        _log_file_name = None
+        with open(gtid_index_file, "r") as fr:
+            for line in fr.readlines():
+                if gtid in line:
+                    _file_name, _gtid, _gno = line.split(":")
+                    if int(_gno) >= int(gno):
+                        _log_file_name = _file_name
+                        break
+        if _log_file_name is None:
+            logger.info("%s has not found in %s" % (gtid_set, gtid_index_file))
+            return False
+
+        logger.info("%s has found in %s" % (gtid_set, _log_file_name))
+        with open(self._binlog_dir + "/" + _log_file_name, mode="rb") as fr:
+            _file_header = fr.read(4)
+            if _file_header != bytes.fromhex("fe62696e"):
+                logger.error("It is not a binlog file.")
+                exit()
+
+            '''
+            4              timestamp
+            1              event type
+            4              server-id
+            4              event-size
+            4              log pos
+            2              flags
+            '''
+            while True:
+                event_header = fr.read(19)
+                if len(event_header) == 0:
+                    break
+                timestamp, event_type, server_id, event_size, log_pos, flags = struct.unpack('<IBIIIH', event_header)
+                logger.debug("Binlog Event[%s]: [%s] %s %s" % (timestamp,
+                                                               event_type,
+                                                               self.eventmap.get(event_type), log_pos))
+                event_body = fr.read(event_size - 19)
+                if event_type == GTID_LOG_EVENT:
+                    gtid_event = GitdEvent.loadFromPacket(event_body)
+                    logger.debug("%s %s" % (gtid_event.gtid, log_pos))
+                    if gtid_set == gtid_event.gtid:
+                        self._start_log_file = _log_file_name
+                        self._start_log_pos = log_pos
+                        return _log_file_name, log_pos
+
+    def fetch_binlog_events(self):
+        if self._start_log_file is None:
+            return None
+        with open("%s/%s.index" % (self._binlog_dir, self._binlog_name), "r") as fr:
+            _start_send = False
+            for line in fr.readlines():
+                if self._start_log_file in line:
+                    _start_send = True
+                if _start_send is False:
+                    continue
+                _log_file = line[:-1]
+                print(_log_file)
+                with open("%s/%s" % (self._binlog_dir, _log_file), "rb") as _fr:
+                    if _log_file == self._start_log_file:
+                        _fr.read(self._start_log_pos)
+                    else:
+                        _fr.read(4)
+                    while True:
+                        event_header = _fr.read(19)
+                        if len(event_header) == 0:
+                            break
+                        event_size = struct.unpack('<I', event_header[9:13])[0]
+                        event_body = _fr.read(event_size - 19)
+                        yield event_header + event_body
+
+
+class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
+    connection_id = 0
+    timeout = 5
+    user_id = 0
+    logger = logging.getLogger('server')
+    server_id = 0
+
+    def setup(self):
+        global connection_counter
+        connection_counter += 1
+        self.connection_id = connection_counter
+        pass
+
+    def send_packet(self, packet):
+        self.request.sendall(packet)
+
+    def read_packet(self):
         """
         Reads a packet from a socket
         """
-        socket_in = self._connection
         # Read the size of the packet
+        socket_in = self.request
         psize = bytearray(3)
         socket_in.recv_into(psize, 3)
 
@@ -50,350 +142,118 @@ class BaseStream(object):
 
         # Combine the chunks
         psize.extend(packet_payload)
-        packetType = getType(psize)
-
-        if packetType == Flags.ERR:
-            buf = ERR.loadFromPacket(psize)
-            logger.error("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
-            self.close()
-            exit(1)
 
         return psize
 
-    def _send_packet(self, buff):
-        skt = self._connection
-        skt.sendall(buff)
+    def handle(self):
 
-    def get_conn(self):
-        conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        host = self._connection_settings["host"]
-        port = self._connection_settings["port"]
-        user = self._connection_settings["user"]
-        password = self._connection_settings["password"]
-        schema = ""
-        conn.connect((host, port))
-        self._connection = conn
+        # 认证
+        challenge1 = '12345678'
+        challenge2 = '123456789012'
+        challenge = self.create_challenge(challenge1, challenge2)
+        self.send_packet(challenge.toPacket())
 
-        challenge = Challenge.loadFromPacket(self._read_packet())
-
-        challenge1 = challenge.challenge1
-        challenge2 = challenge.challenge2
-
-        scramble_password = scramble_native_password(password, challenge1 + challenge2)
+        packet = self.read_packet()
         response = Response()
-        response.sequenceId = 1
-        response.capabilityFlags = 33531397
-        response.characterSet = 33
-        response.maxPacketSize = 16777216
-        response.clientAttributes["_client_name"] = 'pymysql'
-        response.clientAttributes["_pid"] = str(os.getpid())
-        response.clientAttributes["_client_version"] = '5.7'
-        response.clientAttributes["program_name"] = 'mysql'
-        response.pluginName = 'mysql_native_password'
-        response.username = user
-        response.schema = schema
-        response.authResponse = scramble_password
-        response.removeCapabilityFlag(Flags.CLIENT_COMPRESS)
-        response.removeCapabilityFlag(Flags.CLIENT_SSL)
-        response.removeCapabilityFlag(Flags.CLIENT_LOCAL_FILES)
+        response = response.loadFromPacket(packet)
 
-        self._send_packet(response.toPacket())
+        username = response.username
+        self.logger.info("login user:" + username)
 
-        _packet = self._read_packet()
-        packetType = getType(_packet)
+        password = 'repl1234'
+        self.user_id = 'repl'
 
-        if packetType == Flags.ERR:
-            buf = ERR.loadFromPacket(_packet)
-            logger.error("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
-            self.close()
-            exit(1)
+        # 验证密码
+        native_password = scramble_native_password(password, challenge1 + challenge2)
 
-    def close(self):
-        self._connection.close()
-
-
-class BinLogReaderStream(BaseStream):
-    """Connect to replication stream and read event
-    """
-    report_slave = None
-
-    def __init__(self, connection_settings, log_file=None, log_pos=None, auto_position=None):
-        super().__init__(connection_settings)
-        self.__log_file = log_file
-        self.__log_pos = log_pos
-        self.__auto_position = auto_position
-        self.__has_register_slave = False
-        if self._connection_settings["semi_sync"]:
-            self.__binlog_header_fix_length = 7  # 4 + 1 + 2, packet header + command + semi sycn magic number
-        else:
-            self._binlog_header_fix_length = 5  # 4 + 1, packet header + command
-
-    def set_log_file(self, log_file):
-        self.__log_file = log_file
-
-    def _register_slave(self):
-
-        if self.__has_register_slave:
+        if response.authResponse.encode("iso-8859-1") != native_password:
+            err = ERR(9001, '28000', '[%s] Access denied.' % username)
+            buff = err.toPacket()
+            self.send_packet(buff)
+            self.finish()
             return
 
-        master_id = self._connection_settings["master_id"]
-        port = self._connection_settings["port"]
-        server_id = self._connection_settings["server_id"]
-        server_uuid = self._connection_settings["server_uuid"]
-        heartbeat_period = self._connection_settings["heartbeat_period"]
+        buff = OK()
+        self.send_packet(buff)
 
-        sql = Query()
-        sql.sequenceId = 0
-        sql.query = "SET @slave_uuid= '%s'" % server_uuid
-        packet = sql.toPacket()
-        self._send_packet(packet)
-        self._read_packet()
-
-        sql = Query()
-        sql.sequenceId = 0
-        sql.query = "SET @master_heartbeat_period= %d" % heartbeat_period
-        packet = sql.toPacket()
-        self._send_packet(packet)
-        self._read_packet()
-
-        slave = Slave("", '', '', port, master_id, server_id)
-        slave.sequenceId = 0
-        packet = slave.getPayload()
-        self._send_packet(packet)
-        self._read_packet()
-
-        # 是否启用半同步
-        if self._connection_settings["semi_sync"]:
-            sql = Query()
-            sql.sequenceId = 0
-            sql.query = "SET @rpl_semi_sync_slave= 1"
-            packet = sql.toPacket()
-            self._send_packet(packet)
-            self._read_packet()
-
-        if self.__auto_position:
-            dump = DumpGtid(server_id, self.__auto_position)
-        else:
-            logger.info("Dump binlog from %s at %d" % (self.__log_file, self.__log_pos))
-            dump = DumpPos(server_id, self.__log_file, self.__log_pos)
-        dump.sequenceId = 0
-        packet = dump.getPayload()
-        self._send_packet(packet)
-        self._read_packet()
-
-        self.__has_register_slave = True
-
-    def fetchone(self):
+        # 查询
         while True:
 
-            self._register_slave()
-            packet = self._read_packet()
-            sequenceId = getSequenceId(packet)
-            packetType = getType(packet)
+            packet = self.read_packet()
+            packet_type = getType(packet)
 
-            unpack = struct.unpack('<IcIIIH',
-                                   packet[self.__binlog_header_fix_length:self.__binlog_header_fix_length + 19])
-            # Header
-            timestamp = unpack[0]
-            event_type = byte2int(unpack[1])
-            server_id = unpack[2]
-            event_size = unpack[3]
-            log_pos = unpack[4]
-            flags = unpack[5]
+            if packet_type == Flags.COM_QUIT:
+                self.finish()
+            elif packet_type == Flags.COM_BINLOG_DUMP_GTID:
+                pass
 
-            # 跳过HEARTBEAT_EVENT
-            if event_type == HEARTBEAT_EVENT:
-                continue
+            elif packet_type == Flags.COM_QUERY:
+                self.handle_query(packet)
+            elif packet_type == Flags.COM_FIELD_LIST:
+                self.dispatch_packet(packet)
 
-            # 跳过重启后的第一个 FORMAT_DESCRIPTION_EVENT
-            if event_type == FORMAT_DESCRIPTION_EVENT and log_pos == 0:
-                continue
+    def dump_binlog_gtid(self):
+        pass
 
-            # Send SemiAck after xid event
-            if self._connection_settings["semi_sync"]:
-                if event_type in (XID_EVENT, QUERY_EVENT):
-                    ack = SemiAck(self.__log_file, log_pos)
-                    ack.sequenceId = 0
-                    acp_packet = ack.toPacket()
-                    self._send_packet(acp_packet)
+    def create_challenge(self, challenge1, challenge2):
+        # 认证
+        challenge = Challenge()
+        challenge.protocolVersion = 10
+        challenge.serverVersion = '0.1.1-dev'
+        challenge.connectionId = self.connection_id
+        challenge.challenge1 = challenge1
+        challenge.challenge2 = challenge2
+        challenge.capabilityFlags = 4160717151
+        challenge.characterSet = 224
+        challenge.statusFlags = 2
+        challenge.authPluginDataLength = 21
+        challenge.authPluginName = 'mysql_native_password'
+        challenge.sequenceId = 0
+        return challenge
 
-            if packetType == Flags.ERR:
-                buf = ERR.loadFromPacket(packet)
-                logger.error("error:", buf.errorCode, buf.sqlState, buf.errorMessage)
-                self.close()
-                exit(1)
+    def dispatch_packet(self, packet, mysql_pipe=None):
+        pass
 
-            return (timestamp, event_type, event_size, log_pos), packet[self.__binlog_header_fix_length:]
-
-    def __iter__(self):
-        return iter(self.fetchone, None)
+    def handle_query(self, packet):
+        pass
 
 
-class BinlogServer(BaseStream):
-    """
-    dump binlog into file from master
-    """
-
-    _log_file = None
-    _log_pos = 4
-
-    def __init__(self, connection_settings):
-        super().__init__(connection_settings)
-        if "binlog_dir" in connection_settings.keys() and connection_settings["binlog_dir"]:
-            self._binlog_dir = connection_settings["binlog_dir"]
-        else:
-            self._binlog_dir = os.path.dirname(__file__) + '/binlogs/'
-        if not os.path.isdir(self._binlog_dir):
-            os.makedirs(self._binlog_dir)
-
-        self._last_logfile_path = self._binlog_dir + "_last_logfile"
-        self.binlog_reader = None
-
-        self._set_last_logfile()
-        self._set_last_logpos()
-
-    def _set_last_logfile(self):
-        if os.path.isfile(self._last_logfile_path):
-            with open(self._last_logfile_path, "r", ) as f:
-                self._log_file = f.readline()
-        else:
-            self._log_file = "mysql-bin.000001"
-
-    def _save_last_logfile(self, logfile):
-
-        with open(self._last_logfile_path, "w",) as f:
-            f.write(logfile)
-
-    def _set_last_logpos(self):
-        """
-        https://dev.mysql.com/doc/internals/en/event-structure.html
-        +=====================================+
-        | event  | timestamp         0 : 4    |
-        | header +----------------------------+
-        |        | type_code         4 : 1    |
-        |        +----------------------------+
-        |        | server_id         5 : 4    |
-        |        +----------------------------+
-        |        | event_length      9 : 4    |
-        |        +----------------------------+
-        |        | next_position    13 : 4    |
-        |        +----------------------------+
-        |        | flags            17 : 2    |
-        |        +----------------------------+
-        |        | extra_headers    19 : x-19 |
-        +=====================================+
-        | event  | fixed part        x : y    |
-        | data   +----------------------------+
-        |        | variable part              |
-        +=====================================+
-        """
-        if not isfile(self._get_cur_binlog_file()):
-            self._log_pos = 4
-        else:
-            logger.debug("Parse last log pos from %s" % self._get_cur_binlog_file())
-            with open(self._get_cur_binlog_file(), "rb", ) as f:
-                next_position = 4
-                f.read(next_position)       # file header
-                while True:
-                    if len(f.read(4 + 1 + 4)) < 8:
-                        break
-                    event_length = struct.unpack("<I", f.read(4))[0]
-                    next_position = struct.unpack("<I", f.read(4))[0]
-                    f.read(2)
-                    f.read(event_length - 19)
-                    # logger.debug("next_position: %s" % next_position)
-                    self._log_pos = next_position
-
-    def _get_cur_binlog_file(self):
-        return self._binlog_dir + "/" + self._log_file
-
-    def _get_rotate_log_file(self, packet):
-
-        """
-        0 4 43 0
-        Length: 0, SequenceId: 0, Header: =4
-        00000000  00 00 00 00 04 74 72 32  00 2B 00 00 00 00 00 00   .....tr2 .+......
-        00000010  00 20 00 04 00 00 00 00  00 00 00 6D 79 73 71 6C   . ...... ...mysql
-        00000020  2D 62 69 6E 2E 30 30 30  30 30 32                  -bin.000 002
-        """
-
-        value = ""
-        for i in range(27, len(packet)):
-            if packet[i] == 0x00:
-                break
-            value += chr(packet[i])
-        self._log_file = value
-
-        return value
-
-    def _init_binlog_file(self, log_file=None):
-        if log_file:
-            self._log_file = log_file
-        if not isfile(self._get_cur_binlog_file()):
-            fw = open(self._get_cur_binlog_file(), 'ab')
-            fw.write(bytes.fromhex('fe62696e'))
-        else:
-            fw = open(self._get_cur_binlog_file(), 'ab')
-        return fw
-
-    def close(self):
-        self._connection.close()
-        self.binlog_reader.close()
-
-    def run(self):
-
-        fw = self._init_binlog_file()
-        self.binlog_reader = BinLogReaderStream(self._connection_settings,
-                                                log_file=self._log_file,
-                                                log_pos=self._log_pos
-                                           )
-        for (timestamp, event_type, event_size, log_pos), packet in self.binlog_reader:
-            logger.info("Received Event[%s]: [%s] %s %s %s" % (timestamp,
-                                                               event_type,
-                                                               self.eventmap.get(event_type),  event_size, log_pos))
-            dump(packet)
-            fw.write(packet)
-            fw.flush()
-            self._log_pos = log_pos
-            if event_type == ROTATE_EVENT:
-                self._save_last_logfile(self._log_file)
-                fw.close()
-                new_log_file = self._get_rotate_log_file(packet)
-                logger.info("Rotate new binlog file: %s" % new_log_file)
-                fw = self._init_binlog_file(log_file=new_log_file)
-                self.binlog_reader.set_log_file(new_log_file)
-
-            # if log_pos > 2200:
-            #     break
+class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
+    pass
 
 
-if __name__ == "__main__":
+def main():
+    # Port 0 means to select an arbitrary unused port
+    HOST, PORT = "0.0.0.0", 3307
+
+    server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
+    ip, port = server.server_address
 
     FORMAT = "%(asctime)s %(message)s"
     logging.basicConfig(format=FORMAT)
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
+    server_thread = threading.Thread(target=server.serve_forever)
 
-    connection_settings = {
-        "host": "192.168.1.100",
-        "port": 3306,
-        "user": "repl",
-        "password": "repl1234",
-        "master_id": 3306101,
-        "server_id": 3306202,
-        "semi_sync": True,
-        "server_uuid": "a721031c-d2c1-11e9-897c-080027adb7d7",
-        "heartbeat_period": 30000001024
-    }
-    logger.info("Start Binlog Server from %s: %s" % (connection_settings['host'], connection_settings['port']))
+    server_thread.start()
+    logger.info("BinlogServer running in thread: %s %s %s" % (server_thread.name, HOST, PORT))
 
-    try:
-        server = BinlogServer(connection_settings)
-        server.run()
-    except KeyboardInterrupt:
-        logger.info("Stop Binlog Server from %s: %s at %s %s" % (connection_settings['host'],
-                                                                 connection_settings['port'],
-                                                                 server._log_file,
-                                                                 server._log_pos,
-                                                                 ))
-        server.close()
+
+def test_binlog_parse():
+    FORMAT = "%(asctime)s %(message)s"
+    logging.basicConfig(format=FORMAT)
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+
+    reader = BinlogGTIDReader({"binlog_name": "mysql-bin"})
+    reader.find_log_pos_by_gtid("f0ea18e0-3cff-11e9-9488-0800275ae9e7:30")
+    for binlog_event in reader.fetch_binlog_events():
+        timestamp, event_type, server_id, event_size, log_pos, flags = struct.unpack('<IBIIIH', binlog_event[:19])
+        logger.debug("Binlog Event[%s]: [%s] %s %s" % (timestamp,
+                                                       event_type,
+                                                       event_type, log_pos))
+
+
+if __name__ == "__main__":
+    # main()
+    test_binlog_parse()
