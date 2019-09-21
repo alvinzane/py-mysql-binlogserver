@@ -238,6 +238,7 @@ class BinlogDumper(BaseStream):
     _log_file = None
     _log_pos = 4
     _last_gtid = None
+    _binlog_name = "mysql-bin"
 
     def __init__(self, connection_settings):
         super().__init__(connection_settings)
@@ -250,6 +251,7 @@ class BinlogDumper(BaseStream):
 
         self._last_logfile_path = self._binlog_dir + "_last_logfile"
         self.binlog_reader = None
+        self._binlog_name = connection_settings["binlog_name"]
 
         self._set_last_logfile()
         self._set_last_logpos()
@@ -260,7 +262,7 @@ class BinlogDumper(BaseStream):
             with open(self._last_logfile_path, "r", ) as f:
                 self._log_file = f.readline()
         else:
-            self._log_file = "mysql-bin.000001"
+            self._log_file = self._binlog_name + ".000001"
 
     def _save_last_logfile(self, logfile):
         with open(self._last_logfile_path, "w", ) as f:
@@ -386,19 +388,19 @@ class BinlogDumper(BaseStream):
             fw.flush()
             self._log_pos = log_pos
             if event_type == GTID_LOG_EVENT:
-                dump_my_packet(packet)
-                gitd_event = GitdEvent.loadFromPacket(packet)
+                gitd_event = GitdEvent.loadFromPacket(packet[19:])
                 self._save_gtid_sets(gitd_event.gtid)
             if event_type == ROTATE_EVENT:
                 self._save_last_logfile(self._log_file)
+                self._save_binlog_index()
+                self._save_gtid_index()
+
                 fw.close()
                 new_log_file = self._get_rotate_log_file(packet)
                 logger.info("Rotate new binlog file: %s" % new_log_file)
                 fw = self._init_binlog_file(log_file=new_log_file)
                 self.binlog_reader.set_log_file(new_log_file)
                 self._log_file = new_log_file
-                self._save_binlog_index()
-                self._save_gtid_index()
                 self._reset_gtid_sets()
 
 
@@ -418,7 +420,8 @@ if __name__ == "__main__":
         "server_id": 3306202,
         "semi_sync": True,
         "server_uuid": "a721031c-d2c1-11e9-897c-080027adb7d7",
-        "heartbeat_period": 30000001024
+        "heartbeat_period": 30000001024,
+        "binlog_name": "mysql-bin"
     }
     logger.info("Start Binlog Server from %s: %s" % (connection_settings['host'], connection_settings['port']))
 

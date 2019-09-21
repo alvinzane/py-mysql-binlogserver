@@ -25,7 +25,7 @@ class GitdEvent(Packet):
     def loadFromPacket(packet):
 
         obj = GitdEvent()
-        proto = Proto(packet, 19)
+        proto = Proto(packet)
 
         obj.commit_flag = byte2int(proto.get_fixed_int(1)) == 1
         obj.sid = proto.read(16)
