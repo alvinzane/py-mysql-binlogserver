@@ -47,7 +47,7 @@ def main():
         "host": "192.168.1.100",
         "port": 3306,
         "user": "repl",
-        "password": "repl1234",
+        "password": "******",
         "master_id": 3306101,
         "server_id": 3306202,
         "semi_sync": True,
@@ -83,7 +83,7 @@ Test BinlogServer
 -----------------
 ```sql
 
-$mysql -h192.168.1.1 -urepl -prepl1234 -P3308
+$mysql -h192.168.1.1 -urepl -p****** -P3308
 mysql: [Warning] Using a password on the command line interface can be insecure.
 Welcome to the MySQL monitor.  Commands end with ; or \g.
 Your MySQL connection id is 2
