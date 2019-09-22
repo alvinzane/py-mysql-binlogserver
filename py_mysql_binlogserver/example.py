@@ -24,11 +24,11 @@ def main():
 
     try:
 
-        client = BinlogDumper(connection_settings)
-        client.run()
-
         server = BinlogServer(host="0.0.0.0", port=3308)
         server.run()
+
+        client = BinlogDumper(connection_settings)
+        client.run()
 
     except KeyboardInterrupt:
         logger.info("Stop Binlog Dumper from %s: %s at %s %s" % (connection_settings['host'],
