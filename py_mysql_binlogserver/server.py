@@ -4,15 +4,21 @@ import os
 import socketserver
 import struct
 import threading
+from _md5 import md5
+from io import BytesIO
 
+from py_mysql_binlogserver.constants.COMMAND import com_type_name
 from py_mysql_binlogserver.constants.EVENT_TYPE import event_type_name, GTID_LOG_EVENT
+from py_mysql_binlogserver.packet.binlog_event import BinlogEvent
 from py_mysql_binlogserver.packet.challenge import Challenge
 from py_mysql_binlogserver.packet.gtid_event import GitdEvent
+from py_mysql_binlogserver.packet.query import Query
 from py_mysql_binlogserver.packet.response import Response
 from py_mysql_binlogserver.protocol import Flags
 from py_mysql_binlogserver.protocol.err import ERR
+from py_mysql_binlogserver.protocol.gtid import GtidSet
 from py_mysql_binlogserver.protocol.ok import OK
-from py_mysql_binlogserver.protocol.packet import getSize, getType, dump_my_packet
+from py_mysql_binlogserver.protocol.packet import getSize, getType, dump_my_packet, file2packet
 from py_mysql_binlogserver.protocol.proto import scramble_native_password
 
 SocketServer = socketserver
@@ -24,12 +30,11 @@ class BinlogGTIDReader(object):
 
     _start_log_file = None
     _start_log_pos = 4
+    _binlog_dir = os.path.dirname(__file__) + '/binlogs/'
 
     def __init__(self, connection_settings):
         if "binlog_dir" in connection_settings.keys() and connection_settings["binlog_dir"]:
             self._binlog_dir = connection_settings["binlog_dir"]
-        else:
-            self._binlog_dir = os.path.dirname(__file__) + '/binlogs/'
         if not os.path.isdir(self._binlog_dir):
             # TODO rise a error
             pass
@@ -39,6 +44,8 @@ class BinlogGTIDReader(object):
     def find_log_pos_by_gtid(self, gtid_set):
         gtid_index_file = "%s/%s.gtid.index" % (self._binlog_dir, self._binlog_name)
         gtid, gno = gtid_set.split(":")
+        if "-" in gno:
+            gno = gno.split("-")[1]
         _log_file_name = None
         with open(gtid_index_file, "r") as fr:
             for line in fr.readlines():
@@ -115,6 +122,7 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
     user_id = 0
     logger = logging.getLogger('server')
     server_id = 0
+    dir_name = os.path.dirname(__file__)
 
     def setup(self):
         global connection_counter
@@ -173,33 +181,52 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
             self.finish()
             return
 
-        buff = OK()
+        buff = file2packet("auth_result.cap")
         self.send_packet(buff)
+        # self.send_packet(bytes.fromhex("07 00 00 02 00 00 00 02 00 00 00"))
 
         # 查询
         while True:
 
             packet = self.read_packet()
+            if len(packet) < 4:
+                continue
             packet_type = getType(packet)
+
+            # dump_my_packet(packet)
+            print('packet_type', packet_type, com_type_name(packet_type))
 
             if packet_type == Flags.COM_QUIT:
                 self.finish()
+            elif packet_type == Flags.COM_REGISTER_SLAVE:
+                logger.info("Received COM_REGISTER_SLAVE")
+                self.send_packet(OK().toPacket())
+
             elif packet_type == Flags.COM_BINLOG_DUMP_GTID:
-                pass
+                logger.info("Received COM_BINLOG_DUMP_GTID")
+
+                payload = packet[27:]
+                gtid_set = GtidSet.decode(BytesIO(payload))
+
+                self.dump_binlog_gtid(gtid_set)
 
             elif packet_type == Flags.COM_QUERY:
                 self.handle_query(packet)
-            elif packet_type == Flags.COM_FIELD_LIST:
-                self.dispatch_packet(packet)
 
-    def dump_binlog_gtid(self):
-        pass
+    def dump_binlog_gtid(self, gtid_set):
+        logger.info("Begin dump gtid binlog from %s " % (gtid_set,))
+        reader = BinlogGTIDReader({"binlog_name": "mysql-bin"})
+
+        for gtid in str(gtid_set).split(","):
+            reader.find_log_pos_by_gtid(gtid)
+            for event in reader.fetch_binlog_events():
+                self.send_packet(BinlogEvent(event).toPacket())
 
     def create_challenge(self, challenge1, challenge2):
         # 认证
         challenge = Challenge()
         challenge.protocolVersion = 10
-        challenge.serverVersion = '0.1.1-dev'
+        challenge.serverVersion = '5.7.20-log'
         challenge.connectionId = self.connection_id
         challenge.challenge1 = challenge1
         challenge.challenge2 = challenge2
@@ -211,32 +238,50 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
         challenge.sequenceId = 0
         return challenge
 
-    def dispatch_packet(self, packet, mysql_pipe=None):
-        pass
+    def dispatch_packet(self, qp):
+        """
+        从缓存从读取回包，没有就响应错误
+        """
+        dir_name = self.dir_name + "/cap/" + md5(qp.query.encode()).hexdigest()
+
+        if not os.path.isdir(dir_name):
+            dir_name = self.dir_name + "/cap/" + '0000_base'
+
+        # 缓存包内含有一个sql txt文件
+        for idx in range(0, len(os.listdir(dir_name)) - 1):
+            cap_file = dir_name + "/" + str(idx) + ".cap"
+            with open(cap_file, "rb") as rf:
+                buff = rf.read(10240)
+            self.send_packet(buff)
 
     def handle_query(self, packet):
-        pass
+        qp = Query.loadFromPacket(packet)
+        logger.info("query: " + qp.query)
+        self.dispatch_packet(qp)
 
 
 class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
     pass
 
 
-def main():
-    # Port 0 means to select an arbitrary unused port
-    HOST, PORT = "0.0.0.0", 3307
+class BinlogServer(object):
 
-    server = ThreadedTCPServer((HOST, PORT), ThreadedTCPRequestHandler)
-    ip, port = server.server_address
+    def __init__(self, host="0.0.0.0", port=3306):
+        self.host = host
+        self.port = port
 
-    FORMAT = "%(asctime)s %(message)s"
-    logging.basicConfig(format=FORMAT)
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-    server_thread = threading.Thread(target=server.serve_forever)
+    def run(self):
 
-    server_thread.start()
-    logger.info("BinlogServer running in thread: %s %s %s" % (server_thread.name, HOST, PORT))
+        server = ThreadedTCPServer((self.host, self.port), ThreadedTCPRequestHandler)
+        ip, port = server.server_address
+
+        logging.basicConfig(format="%(asctime)s %(message)s")
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+        server_thread = threading.Thread(target=server.serve_forever)
+
+        server_thread.start()
+        logger.info("BinlogServer running in thread: %s %s %s" % (server_thread.name, self.host, self.port))
 
 
 def test_binlog_parse():
@@ -255,5 +300,15 @@ def test_binlog_parse():
 
 
 if __name__ == "__main__":
-    # main()
-    test_binlog_parse()
+    '''
+    CHANGE MASTER TO
+      MASTER_HOST='192.168.1.1',
+      MASTER_USER='repl',
+      MASTER_PASSWORD='repl1234',
+      MASTER_PORT=6066,
+      MASTER_AUTO_POSITION=1;
+    '''
+    server = BinlogServer(port=3308)
+    server.run()
+
+    # test_binlog_parse()

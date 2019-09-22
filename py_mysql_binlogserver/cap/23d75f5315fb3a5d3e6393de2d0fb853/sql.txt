@@ -1,0 +1,1 @@
+SET @master_heartbeat_period= 30000001024

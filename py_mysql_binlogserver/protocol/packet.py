@@ -2,6 +2,7 @@
 
 import logging
 import logging.handlers
+import os
 
 from py_mysql_binlogserver.protocol.Flags import header_name
 from py_mysql_binlogserver.protocol.proto import Proto
@@ -140,6 +141,14 @@ def read_server_packet(socket_in):
     #     dump(psize)
 
     return psize
+
+
+def file2packet(filename):
+    tmp_dir = os.path.dirname(os.path.dirname(__file__)) + "/cap"
+    fi = open(tmp_dir + "/" + filename, "r+b")
+    packet = bytearray(fi.read())
+    fi.close()
+    return packet
 
 
 def dump_my_packet(packet):

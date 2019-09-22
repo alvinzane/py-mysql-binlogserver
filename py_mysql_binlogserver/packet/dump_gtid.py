@@ -2,10 +2,11 @@
 # coding=utf-8
 
 import struct
+from io import BytesIO
 
 from py_mysql_binlogserver.constants.COMMAND import COM_BINLOG_DUMP_GTID
-from py_mysql_binlogserver.protocol.gtid import GtidSet
-from py_mysql_binlogserver.protocol.packet import Packet
+from py_mysql_binlogserver.protocol.gtid import GtidSet, Gtid
+from py_mysql_binlogserver.protocol.packet import Packet, dump_my_packet
 from py_mysql_binlogserver.protocol.proto import int2byte
 
 
@@ -95,3 +96,36 @@ class DumpGtid(Packet):
     @staticmethod
     def loadFromPacket(packet):
         return None
+
+
+if __name__ == "__main__":
+    packet = bytes.fromhex(
+        "6f0000001e000075723200000000000400000000000000580000000200000000000000ba66414cd10d11e9b4b00800275ae9e7010000000000000001000000000000001700000000000000f0ea18e03cff11e994880800275ae9e7010000000000000001000000000000002000000000000000")
+
+    print("length 1:", len(packet))
+    dump_my_packet(packet)
+
+    header_size = (2 +  # binlog_flags
+                   4 +  # server_id
+                   4 +  # binlog_name_info_size
+                   4 +  # empty binlog name
+                   8    # binlog_pos_info_size
+                   )
+
+    off = 4 + 1
+    # header = struct.unpack('<iHIIQI', packet[off:header_size+off])
+    # print(header)
+
+    # payload = packet[27:]
+    payload = packet[off + header_size:]
+    dump_my_packet(payload)
+    gtid_set = GtidSet.decode(BytesIO(payload))
+    print(gtid_set)
+
+    set_repr = 'ba66414c-d10d-11e9-b4b0-0800275ae9e7:1-22,' \
+               'f0ea18e0-3cff-11e9-9488-0800275ae9e7:1-31'
+
+    myset = GtidSet(set_repr)
+    payload = myset.encode()
+    print("length 2:", len(payload))
+    dump_my_packet(payload)

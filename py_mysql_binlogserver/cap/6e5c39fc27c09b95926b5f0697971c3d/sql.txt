@@ -1,0 +1,1 @@
+SET @slave_uuid= 'ba66414c-d10d-11e9-b4b0-0800275ae9e7'

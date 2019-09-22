@@ -1,0 +1,1 @@
+SELECT @master_binlog_checksum

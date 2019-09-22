@@ -1,4 +1,3 @@
-
 COM_SLEEP = 0x00
 COM_QUIT = 0x01
 COM_INIT_DB = 0x02
@@ -31,3 +30,13 @@ COM_STMT_FETCH = 0x1c
 COM_DAEMON = 0x1d
 COM_BINLOG_DUMP_GTID = 0x1e
 COM_END = 0x1f
+
+local_vars = locals()
+
+
+def com_type_name(val):
+    for _var in local_vars:
+        if "COM_" in _var:
+            if local_vars[_var] == val:
+                return _var
+
