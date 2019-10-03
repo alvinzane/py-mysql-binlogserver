@@ -9,12 +9,14 @@ class BinlogEvent(Packet):
     def __init__(self, event):
         super(BinlogEvent, self).__init__()
         self.event = event
+        self.sequenceId = 0
 
     def getPayload(self):
-        payload = bytearray()
+        payload = b''
 
-        payload.extend(bytes.fromhex("00ef00"))
-        payload.extend(self.event)
+        # payload += bytes.fromhex("00ef00")
+        payload += bytes.fromhex("00")
+        payload += self.event
 
         return payload
 

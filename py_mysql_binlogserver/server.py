@@ -4,6 +4,7 @@ import os
 import socketserver
 import struct
 import threading
+import time
 from _md5 import md5
 from io import BytesIO
 
@@ -18,7 +19,8 @@ from py_mysql_binlogserver.protocol import Flags
 from py_mysql_binlogserver.protocol.err import ERR
 from py_mysql_binlogserver.protocol.gtid import GtidSet
 from py_mysql_binlogserver.protocol.ok import OK
-from py_mysql_binlogserver.protocol.packet import getSize, getType, dump_my_packet, file2packet
+from py_mysql_binlogserver.protocol.packet import getSize, getType, dump_my_packet, file2packet, \
+    dump
 from py_mysql_binlogserver.protocol.proto import scramble_native_password
 
 SocketServer = socketserver
@@ -27,7 +29,6 @@ logger = logging.getLogger()
 
 
 class BinlogGTIDReader(object):
-
     _start_log_file = None
     _start_log_pos = 4
     _binlog_dir = os.path.dirname(__file__) + '/binlogs/'
@@ -54,9 +55,14 @@ class BinlogGTIDReader(object):
                     if int(_gno) >= int(gno):
                         _log_file_name = _file_name
                         break
+
         if _log_file_name is None:
             logger.info("%s has not found in %s" % (gtid_set, gtid_index_file))
-            return False
+            logger.info("Send binlog events from first file and first pos.")
+            first_binlog_file = self._binlog_name + ".000001"
+            self._start_log_file = first_binlog_file
+            self._start_log_pos = 4
+            return first_binlog_file, 4
 
         logger.info("%s has found in %s" % (gtid_set, _log_file_name))
         with open(self._binlog_dir + "/" + _log_file_name, mode="rb") as fr:
@@ -100,8 +106,7 @@ class BinlogGTIDReader(object):
                     _start_send = True
                 if _start_send is False:
                     continue
-                _log_file = line[:-1]
-                print(_log_file)
+                _log_file = line[:-1]       # 去掉换行符\n
                 with open("%s/%s" % (self._binlog_dir, _log_file), "rb") as _fr:
                     if _log_file == self._start_log_file:
                         _fr.read(self._start_log_pos)
@@ -204,8 +209,10 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
 
             elif packet_type == Flags.COM_BINLOG_DUMP_GTID:
                 logger.info("Received COM_BINLOG_DUMP_GTID")
-
-                payload = packet[27:]
+                dump(packet)
+                # https://dev.mysql.com/doc/internals/en/com-binlog-dump-gtid.html
+                filename_len = struct.unpack("<I", packet[11:15])[0]
+                payload = packet[27 + filename_len:]
                 gtid_set = GtidSet.decode(BytesIO(payload))
 
                 self.dump_binlog_gtid(gtid_set)
@@ -217,10 +224,26 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
         logger.info("Begin dump gtid binlog from %s " % (gtid_set,))
         reader = BinlogGTIDReader({"binlog_name": "mysql-bin"})
 
+        # event = FormatDescriptionEvent(0, 0x0f, 3306101)
+        # event.sequenceId = 1
+        # dump_my_packet(event.toPacket())
+        # self.send_packet(event.toPacket())
+
+        sequence_id = 1
         for gtid in str(gtid_set).split(","):
             reader.find_log_pos_by_gtid(gtid)
             for event in reader.fetch_binlog_events():
-                self.send_packet(BinlogEvent(event).toPacket())
+                # print("Pure binlog event:")
+                # dump_my_packet(event)
+
+                _bin_event = BinlogEvent(event)
+                _bin_event.sequenceId = sequence_id
+
+                print("Full binlog event:")
+                dump_my_packet(_bin_event.toPacket())
+
+                sequence_id = (sequence_id + 1) % 256
+                self.send_packet(_bin_event.toPacket())
 
     def create_challenge(self, challenge1, challenge2):
         # 认证
@@ -271,7 +294,6 @@ class BinlogServer(object):
         self.port = port
 
     def run(self):
-
         server = ThreadedTCPServer((self.host, self.port), ThreadedTCPRequestHandler)
         ip, port = server.server_address
 
@@ -305,7 +327,7 @@ if __name__ == "__main__":
       MASTER_HOST='192.168.1.1',
       MASTER_USER='repl',
       MASTER_PASSWORD='repl1234',
-      MASTER_PORT=6066,
+      MASTER_PORT=3308,
       MASTER_AUTO_POSITION=1;
     '''
     server = BinlogServer(port=3308)
