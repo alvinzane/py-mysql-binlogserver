@@ -10,7 +10,7 @@ from py_mysql_binlogserver.packet.response import Response
 from py_mysql_binlogserver.packet.slave import Slave
 from py_mysql_binlogserver.protocol import Flags
 from py_mysql_binlogserver.protocol.err import ERR
-from py_mysql_binlogserver.protocol.packet import dump_my_packet, send_client_socket, getSequenceId, getType
+from py_mysql_binlogserver.protocol.packet import dump_my_packet, getSequenceId, getType
 from py_mysql_binlogserver.protocol.packet import read_server_packet
 from py_mysql_binlogserver.protocol.proto import scramble_native_password
 from pymysql.util import byte2int
@@ -52,7 +52,7 @@ def get_socket(host='127.0.0.1', port=3306, user="", password="", schema=""):
     print("login 1:")
     dump_my_packet(packet)
 
-    send_client_socket(s, packet)
+    s.sendall(packet)
 
     packet = read_server_packet(s)
     print("received 2:")
