@@ -2,10 +2,17 @@ import logging
 import os
 import socket
 import struct
+import configparser
+import sys
 from os.path import isfile
 
-from py_mysql_binlogserver.constants.EVENT_TYPE import HEARTBEAT_EVENT, XID_EVENT, ROTATE_EVENT, event_type_name, \
-    QUERY_EVENT, FORMAT_DESCRIPTION_EVENT, GTID_LOG_EVENT
+from py_mysql_binlogserver.constants.EVENT_TYPE import (FORMAT_DESCRIPTION_EVENT,
+                                                        GTID_LOG_EVENT,
+                                                        HEARTBEAT_EVENT,
+                                                        QUERY_EVENT,
+                                                        ROTATE_EVENT,
+                                                        XID_EVENT,
+                                                        event_type_name)
 from py_mysql_binlogserver.packet.challenge import Challenge
 from py_mysql_binlogserver.packet.dump_gtid import DumpGtid
 from py_mysql_binlogserver.packet.dump_pos import DumpPos
@@ -16,8 +23,11 @@ from py_mysql_binlogserver.packet.semiack import SemiAck
 from py_mysql_binlogserver.packet.slave import Slave
 from py_mysql_binlogserver.protocol import Flags
 from py_mysql_binlogserver.protocol.err import ERR
-from py_mysql_binlogserver.protocol.packet import getSize, getType, getSequenceId, dump_my_packet, dump
-from py_mysql_binlogserver.protocol.proto import scramble_native_password, byte2int
+from py_mysql_binlogserver.protocol.packet import (dump,
+                                                   getSequenceId, getSize,
+                                                   getType)
+from py_mysql_binlogserver.protocol.proto import (byte2int,
+                                                  scramble_native_password)
 
 logger = logging.getLogger()
 
@@ -68,7 +78,7 @@ class BaseStream(object):
     def get_conn(self):
         conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         host = self._connection_settings["host"]
-        port = self._connection_settings["port"]
+        port = self._connection_settings.getint("port")
         user = self._connection_settings["user"]
         password = self._connection_settings["password"]
         schema = ""
@@ -137,11 +147,11 @@ class BinLogReaderStream(BaseStream):
         if self.__has_register_slave:
             return
 
-        master_id = self._connection_settings["master_id"]
-        port = self._connection_settings["port"]
-        server_id = self._connection_settings["server_id"]
+        master_id = self._connection_settings.getint("master_id")
+        port = self._connection_settings.getint("port")
+        server_id = self._connection_settings.getint("server_id")
         server_uuid = self._connection_settings["server_uuid"]
-        heartbeat_period = self._connection_settings["heartbeat_period"]
+        heartbeat_period = self._connection_settings.getint("heartbeat_period")
 
         sql = Query()
         sql.sequenceId = 0
@@ -245,28 +255,25 @@ class BinlogDumper(BaseStream):
         if "binlog_dir" in connection_settings.keys() and connection_settings["binlog_dir"]:
             self._binlog_dir = connection_settings["binlog_dir"]
         else:
-            self._binlog_dir = os.path.dirname(__file__) + '/binlogs/'
+            self._binlog_dir = os.path.dirname(__file__) + '/binlogs'
         if not os.path.isdir(self._binlog_dir):
             os.makedirs(self._binlog_dir)
 
-        self._last_logfile_path = self._binlog_dir + "_last_logfile"
         self.binlog_reader = None
         self._binlog_name = connection_settings["binlog_name"]
+        self._binlog_index_file = self._binlog_dir + "/" + self._binlog_name + ".index"
 
         self._set_last_logfile()
         self._set_last_logpos()
         self._save_binlog_index()
 
     def _set_last_logfile(self):
-        if os.path.isfile(self._last_logfile_path):
-            with open(self._last_logfile_path, "r", ) as f:
-                self._log_file = f.readline()
+        if os.path.isfile(self._binlog_index_file):
+            for line in open(self._binlog_index_file, "r"):
+                if line.strip():
+                    self._log_file = line.strip()
         else:
             self._log_file = self._binlog_name + ".000001"
-
-    def _save_last_logfile(self, logfile):
-        with open(self._last_logfile_path, "w", ) as f:
-            f.write(logfile)
 
     def _save_gtid_sets(self, gtid):
         self._last_gtid = gtid
@@ -275,13 +282,12 @@ class BinlogDumper(BaseStream):
         self._last_gtid = None
 
     def _save_binlog_index(self):
-        index_file_name = self._binlog_dir + "/" + self._log_file.split(".")[0] + ".index"
-        if os.path.isfile(index_file_name):
-            with open(index_file_name, "r") as fw:
+        if os.path.isfile(self._binlog_index_file):
+            with open(self._binlog_index_file, "r") as fw:
                 for line in fw.readlines():
                     if self._log_file in line:
                         return
-        with open(index_file_name, "a") as fw:
+        with open(self._binlog_index_file, "a") as fw:
             fw.write(self._log_file + "\n")
 
     def _save_gtid_index(self):
@@ -354,7 +360,6 @@ class BinlogDumper(BaseStream):
             if packet[i] == 0x00:
                 break
             value += chr(packet[i])
-        self._log_file = value
 
         return value
 
@@ -375,6 +380,7 @@ class BinlogDumper(BaseStream):
     def run(self):
 
         fw = self._init_binlog_file()
+        skip_a_rotate_event = False
         self.binlog_reader = BinLogReaderStream(self._connection_settings,
                                                 log_file=self._log_file,
                                                 log_pos=self._log_pos
@@ -383,46 +389,48 @@ class BinlogDumper(BaseStream):
             logger.info("Received Event[%s]: [%s] %s %s %s" % (timestamp,
                                                                event_type,
                                                                self.eventmap.get(event_type), event_size, log_pos))
+
+            if skip_a_rotate_event and event_type == ROTATE_EVENT:
+                skip_a_rotate_event = False
+                # self._save_gtid_index()
+                # self._save_binlog_index()
+                # self._reset_gtid_sets()
+                continue
+
             dump(packet)
+            self._log_pos = log_pos
             fw.write(packet)
             fw.flush()
-            self._log_pos = log_pos
+
             if event_type == GTID_LOG_EVENT:
                 gitd_event = GitdEvent.loadFromPacket(packet[19:])
                 self._save_gtid_sets(gitd_event.gtid)
+
             if event_type == ROTATE_EVENT:
-                self._save_last_logfile(self._log_file)
-                self._save_binlog_index()
-                self._save_gtid_index()
 
                 fw.close()
                 new_log_file = self._get_rotate_log_file(packet)
                 logger.info("Rotate new binlog file: %s" % new_log_file)
+
+                self._save_gtid_index()
                 fw = self._init_binlog_file(log_file=new_log_file)
                 self.binlog_reader.set_log_file(new_log_file)
                 self._log_file = new_log_file
-                self._reset_gtid_sets()
+                self._save_binlog_index()
+                skip_a_rotate_event = True
 
 
 if __name__ == "__main__":
 
-    FORMAT = "%(asctime)s %(message)s"
-    logging.basicConfig(format=FORMAT)
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    config = configparser.ConfigParser()
+    conf_file = len(sys.argv) > 1 and sys.argv[1] or os.path.dirname(__file__)+"/example.conf"
+    config.read(conf_file)
 
-    connection_settings = {
-        "host": "192.168.1.100",
-        "port": 3306,
-        "user": "repl",
-        "password": "repl1234",
-        "master_id": 3306101,
-        "server_id": 3306202,
-        "semi_sync": True,
-        "server_uuid": "a721031c-d2c1-11e9-897c-080027adb7d7",
-        "heartbeat_period": 30000001024,
-        "binlog_name": "mysql-bin"
-    }
+    logging.basicConfig(format='%(asctime)s %(levelname)s %(message)s')
+    logger = logging.getLogger()
+    logger.setLevel(config["Logging"].getint("level"))
+
+    connection_settings = config["Dumper"]
     logger.info("Start Binlog Server from %s: %s" % (connection_settings['host'], connection_settings['port']))
 
     try:

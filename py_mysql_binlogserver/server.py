@@ -3,13 +3,13 @@ import logging
 import os
 import socketserver
 import struct
+import sys
 import threading
-import time
+import configparser
 from _md5 import md5
 from io import BytesIO
-
 from py_mysql_binlogserver.constants.COMMAND import com_type_name
-from py_mysql_binlogserver.constants.EVENT_TYPE import event_type_name, GTID_LOG_EVENT
+from py_mysql_binlogserver.constants.EVENT_TYPE import event_type_name, GTID_LOG_EVENT, PREVIOUS_GTIDS_LOG_EVENT
 from py_mysql_binlogserver.packet.binlog_event import BinlogEvent
 from py_mysql_binlogserver.packet.challenge import Challenge
 from py_mysql_binlogserver.packet.gtid_event import GitdEvent
@@ -42,29 +42,7 @@ class BinlogGTIDReader(object):
         self._binlog_name = connection_settings["binlog_name"]
         self.eventmap = event_type_name()
 
-    def find_log_pos_by_gtid(self, gtid_set):
-        gtid_index_file = "%s/%s.gtid.index" % (self._binlog_dir, self._binlog_name)
-        gtid, gno = gtid_set.split(":")
-        if "-" in gno:
-            gno = gno.split("-")[1]
-        _log_file_name = None
-        with open(gtid_index_file, "r") as fr:
-            for line in fr.readlines():
-                if gtid in line:
-                    _file_name, _gtid, _gno = line.split(":")
-                    if int(_gno) >= int(gno):
-                        _log_file_name = _file_name
-                        break
-
-        if _log_file_name is None:
-            logger.info("%s has not found in %s" % (gtid_set, gtid_index_file))
-            logger.info("Send binlog events from first file and first pos.")
-            first_binlog_file = self._binlog_name + ".000001"
-            self._start_log_file = first_binlog_file
-            self._start_log_pos = 4
-            return first_binlog_file, 4
-
-        logger.info("%s has found in %s" % (gtid_set, _log_file_name))
+    def _find_log_pos_in_file(self, _log_file_name, gtid_set):
         with open(self._binlog_dir + "/" + _log_file_name, mode="rb") as fr:
             _file_header = fr.read(4)
             if _file_header != bytes.fromhex("fe62696e"):
@@ -82,7 +60,7 @@ class BinlogGTIDReader(object):
             while True:
                 event_header = fr.read(19)
                 if len(event_header) == 0:
-                    break
+                    return None, 0
                 timestamp, event_type, server_id, event_size, log_pos, flags = struct.unpack('<IBIIIH', event_header)
                 logger.debug("Binlog Event[%s]: [%s] %s %s" % (timestamp,
                                                                event_type,
@@ -93,8 +71,43 @@ class BinlogGTIDReader(object):
                     logger.debug("%s %s" % (gtid_event.gtid, log_pos))
                     if gtid_set == gtid_event.gtid:
                         self._start_log_file = _log_file_name
-                        self._start_log_pos = log_pos
-                        return _log_file_name, log_pos
+                        self._start_log_pos = prev_event_pos
+                        logger.info("Binlog pos has found: %s %s" % (_log_file_name, prev_event_pos))
+                        return _log_file_name, prev_event_pos
+                prev_event_pos = log_pos
+
+    def find_log_pos_by_gtid(self, gtid_set):
+        gtid_index_file = "%s/%s.gtid.index" % (self._binlog_dir, self._binlog_name)
+        *_, gtid, gno = gtid_set.split(":")
+        if "-" in gno:
+            gno = gno.split("-")[1]
+        gtid_set = gtid + ":" + gno
+        _log_file_name = None
+        with open(gtid_index_file, "r") as fr:
+            for line in fr.readlines():
+                if gtid in line:
+                    _file_name, _gtid, _gno = line.split(":")
+                    if int(_gno) >= int(gno):
+                        _log_file_name = _file_name
+                        break
+
+        if _log_file_name is None:
+            logger.info("%s has not found in %s" % (gtid_set, gtid_index_file))
+            return None, 0
+
+        logger.info("Finding %s in %s" % (gtid_set, _log_file_name))
+        _file_name, log_pos = self._find_log_pos_in_file(_log_file_name, gtid_set)
+        # 尝试从最后一binlog文件中找pos
+        if _file_name:
+            return _file_name, log_pos
+        else:
+            _binlog_index_file = self._binlog_dir + "/" + self._binlog_name + ".index"
+            for line in open(_binlog_index_file, "r"):
+                if line.strip():
+                    last_log_file_name = line.strip()
+            if last_log_file_name != _log_file_name:
+                logger.info("Finding %s in last_log_file_name: %s" % (gtid_set, last_log_file_name))
+                return self._find_log_pos_in_file(last_log_file_name, gtid_set)
 
     def fetch_binlog_events(self):
         if self._start_log_file is None:
@@ -106,7 +119,8 @@ class BinlogGTIDReader(object):
                     _start_send = True
                 if _start_send is False:
                     continue
-                _log_file = line[:-1]       # 去掉换行符\n
+                _log_file = line.strip()
+                logger.info(f"Sending binlog file: {_log_file}")
                 with open("%s/%s" % (self._binlog_dir, _log_file), "rb") as _fr:
                     if _log_file == self._start_log_file:
                         _fr.read(self._start_log_pos)
@@ -133,7 +147,6 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
         global connection_counter
         connection_counter += 1
         self.connection_id = connection_counter
-        pass
 
     def send_packet(self, packet):
         self.request.sendall(packet)
@@ -173,13 +186,13 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
         username = response.username
         self.logger.info("login user:" + username)
 
-        password = 'repl1234'
-        self.user_id = 'repl'
+        password = self.server.settings["password"]
+        self.user_id = username
 
         # 验证密码
         native_password = scramble_native_password(password, challenge1 + challenge2)
 
-        if response.authResponse.encode("iso-8859-1") != native_password:
+        if self.server.settings["user"] != username or response.authResponse.encode("iso-8859-1") != native_password:
             err = ERR(9001, '28000', '[%s] Access denied.' % username)
             buff = err.toPacket()
             self.send_packet(buff)
@@ -199,7 +212,7 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
             packet_type = getType(packet)
 
             # dump_my_packet(packet)
-            print('packet_type', packet_type, com_type_name(packet_type))
+            # print('packet_type', packet_type, com_type_name(packet_type))
 
             if packet_type == Flags.COM_QUIT:
                 self.finish()
@@ -231,16 +244,15 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
 
         sequence_id = 1
         for gtid in str(gtid_set).split(","):
-            reader.find_log_pos_by_gtid(gtid)
+            _log_file, _log_pos = reader.find_log_pos_by_gtid(gtid)
+            if not _log_file:
+                continue
             for event in reader.fetch_binlog_events():
-                # print("Pure binlog event:")
-                # dump_my_packet(event)
-
                 _bin_event = BinlogEvent(event)
                 _bin_event.sequenceId = sequence_id
 
-                print("Full binlog event:")
-                dump_my_packet(_bin_event.toPacket())
+                logger.debug("Full binlog event to send:")
+                dump(_bin_event.toPacket())
 
                 sequence_id = (sequence_id + 1) % 256
                 self.send_packet(_bin_event.toPacket())
@@ -289,48 +301,51 @@ class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
 
 class BinlogServer(object):
 
-    def __init__(self, host="0.0.0.0", port=3306):
-        self.host = host
-        self.port = port
+    def __init__(self, server_settings):
+        self.host = server_settings["host"]
+        self.port = server_settings.getint("port")
+        self.settings = server_settings
 
     def run(self):
         server = ThreadedTCPServer((self.host, self.port), ThreadedTCPRequestHandler)
+        server.settings = self.settings
         ip, port = server.server_address
-
-        logging.basicConfig(format="%(asctime)s %(message)s")
-        logger = logging.getLogger()
-        logger.setLevel(logging.DEBUG)
         server_thread = threading.Thread(target=server.serve_forever)
 
         server_thread.start()
         logger.info("BinlogServer running in thread: %s %s %s" % (server_thread.name, self.host, self.port))
 
 
-def test_binlog_parse():
-    FORMAT = "%(asctime)s %(message)s"
-    logging.basicConfig(format=FORMAT)
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
-
-    reader = BinlogGTIDReader({"binlog_name": "mysql-bin"})
-    reader.find_log_pos_by_gtid("f0ea18e0-3cff-11e9-9488-0800275ae9e7:30")
-    for binlog_event in reader.fetch_binlog_events():
-        timestamp, event_type, server_id, event_size, log_pos, flags = struct.unpack('<IBIIIH', binlog_event[:19])
-        logger.debug("Binlog Event[%s]: [%s] %s %s" % (timestamp,
-                                                       event_type,
-                                                       event_type, log_pos))
+# def test_binlog_parse():
+#     reader = BinlogGTIDReader({"binlog_name": "mysql-bin"})
+#     reader.find_log_pos_by_gtid("f0ea18e0-3cff-11e9-9488-0800275ae9e7:30")
+#     for binlog_event in reader.fetch_binlog_events():
+#         timestamp, event_type, server_id, event_size, log_pos, flags = struct.unpack('<IBIIIH', binlog_event[:19])
+#         logger.debug("Binlog Event[%s]: [%s] %s %s" % (timestamp,
+#                                                        event_type,
+#                                                        event_type, log_pos))
 
 
 if __name__ == "__main__":
     '''
     CHANGE MASTER TO
       MASTER_HOST='192.168.1.1',
+      MASTER_PORT=3308,
       MASTER_USER='repl',
       MASTER_PASSWORD='repl1234',
-      MASTER_PORT=3308,
       MASTER_AUTO_POSITION=1;
     '''
-    server = BinlogServer(port=3308)
-    server.run()
 
-    # test_binlog_parse()
+    config = configparser.ConfigParser()
+    conf_file = len(sys.argv) > 1 and sys.argv[1] or os.path.dirname(__file__)+"/example.conf"
+    config.read(conf_file)
+
+    logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s")
+    logger = logging.getLogger()
+    logger.setLevel(config["Logging"].getint("level"))
+
+    server_settings = config["Server"]
+
+    server = BinlogServer(server_settings)
+    server.settings = server_settings
+    server.run()
