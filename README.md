@@ -186,6 +186,7 @@ Testing
 =======
 
 ### Step 1:
+Make some data at Master.
 ```
 # Master
 mysql> create database db3;
@@ -205,6 +206,7 @@ Query OK, 0 rows affected (0.03 sec)
 ```
 
 ### Step 2:
+Ensure Slave is running normally, then stop slave.
 ```
 # Slave
 mysql> use db3;
@@ -252,6 +254,7 @@ Query OK, 0 rows affected (0.00 sec)
 ```
 
 ### Step 3:
+Make new data at Master, ensure data was replicated to the BinlogServer only.
 ```
 # Master
 mysql> insert into t3 select null,'zane';
@@ -283,6 +286,7 @@ mysql> show master status;
 ```
 
 ### Step 4:
+Change master to the BinlogServer, ensure that new data was replicated from the new Master.
 ```
 # Slave
 mysql> CHANGE MASTER TO  MASTER_HOST='192.168.1.1',MASTER_PORT=3307;
@@ -330,8 +334,8 @@ mysql> select * from t3;
 ```
 
 ### Step 5:
+Checking BinlogServer logs.
 ```
-#Checking BinlogServer logs:
 
 2019-10-12 22:09:17,272 INFO Start Binlog Dumper from 192.168.1.100: 3306
 2019-10-12 22:09:17,272 INFO BinlogServer running in thread: Thread-1 0.0.0.0 3307
