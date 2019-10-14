@@ -3,7 +3,7 @@ import struct
 from pprint import pprint
 
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(("192.168.56.101", 3306))
+s.connect(("192.168.1.100", 3306))
 '''
 https://dev.mysql.com/doc/internals/en/connection-phase-packets.html
 1              [0a] protocol version
