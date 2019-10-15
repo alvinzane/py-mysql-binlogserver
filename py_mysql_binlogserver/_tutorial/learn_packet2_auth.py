@@ -43,6 +43,10 @@ def dump_packet(packet, title=None):
 
 
 def scramble_native_password(password, message):
+    """
+    mysql_native_password
+    https://dev.mysql.com/doc/internals/en/secure-password-authentication.html#packet-Authentication::Native41
+    """
     SCRAMBLE_LENGTH = 20
     sha1_new = partial(hashlib.new, 'sha1')
 
@@ -106,7 +110,7 @@ if __name__ == "__main__":
     greeting = get_greeting(s)
 
     username = 'repl'
-    password = 'repl1234'
+    password = 'repl1234-'
     response = get_response(s, username, password, greeting["challenge1"], greeting["challenge2"])
     s.send(response)
     dump_packet(response, "Response packet:")

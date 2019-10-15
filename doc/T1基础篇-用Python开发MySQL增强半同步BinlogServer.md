@@ -14,6 +14,11 @@
 * 仅支持Python3, 不兼容Python2
 * 使用mysql client协议来管理binlogserver --todo
 
+项目地址为：
+```
+https://github.com/alvinzane/py-mysql-binlogserver
+```
+
   假设你已经有了一定的Python编程基础，并且完全理解MySQL半同步复制的原理，接下来我们就一步一步走进实现BinlogServer的技术细节。
   
 ## 二进制基础复习
