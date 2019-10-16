@@ -342,6 +342,82 @@ if __name__ == "__main__":
     read_packet(s)
 ```
 ## Binlog文件格式
+
+先简单回顾一下binlog文件中都有些什么内容：
+```
+mysql> show binlog events in 'mysql-bin.000009';
++------------------+-----+----------------+-----------+-------------+--------------------------------------------------------------------+
+| Log_name         | Pos | Event_type     | Server_id | End_log_pos | Info                                                               |
++------------------+-----+----------------+-----------+-------------+--------------------------------------------------------------------+
+| mysql-bin.000009 |   4 | Format_desc    |   3306100 |         123 | Server ver: 5.7.20-log, Binlog ver: 4                              |
+| mysql-bin.000009 | 123 | Previous_gtids |   3306100 |         190 | f0ea18e0-3cff-11e9-9488-0800275ae9e7:1-19                          |
+| mysql-bin.000009 | 190 | Gtid           |   3306100 |         251 | SET @@SESSION.GTID_NEXT= 'f0ea18e0-3cff-11e9-9488-0800275ae9e7:20' |
+| mysql-bin.000009 | 251 | Query          |   3306100 |         318 | BEGIN                                                              |
+| mysql-bin.000009 | 318 | Table_map      |   3306100 |         361 | table_id: 223 (db3.t3)                                             |
+| mysql-bin.000009 | 361 | Write_rows     |   3306100 |         402 | table_id: 223 flags: STMT_END_F                                    |
+| mysql-bin.000009 | 402 | Xid            |   3306100 |         429 | COMMIT /* xid=286 */                                               |
+| mysql-bin.000009 | 429 | Gtid           |   3306100 |         490 | SET @@SESSION.GTID_NEXT= 'f0ea18e0-3cff-11e9-9488-0800275ae9e7:21' |
+| mysql-bin.000009 | 490 | Query          |   3306100 |         557 | BEGIN                                                              |
+| mysql-bin.000009 | 557 | Table_map      |   3306100 |         600 | table_id: 223 (db3.t3)                                             |
+| mysql-bin.000009 | 600 | Write_rows     |   3306100 |         641 | table_id: 223 flags: STMT_END_F                                    |
+| mysql-bin.000009 | 641 | Xid            |   3306100 |         668 | COMMIT /* xid=287 */                                               |
+| mysql-bin.000009 | 668 | Rotate         |   3306100 |         711 | mysql-bin.000010;pos=4                                             |
++------------------+-----+----------------+-----------+-------------+--------------------------------------------------------------------+
+13 rows in set (0.00 sec)
+```
+可以看出，binlog文件内容就是有很多的Event组成，一个完整的binlog应该是由Format_desc event开始，Rotate event结束，充当Binlog文件的元数据，中间Event才是真正和数据相关Event,每一个Event的格式都不尽相同，需要单独作解析。不过我们的BinlogServer并不关心具体的Event内容，只需要把Event作为一个接收，存储和发送的基本单元即可，简单说就是，把Master发送的Event按顺序存储起来，当有Slave change过来以后，再从指定位置把Event一个一个的发送给Slave，仅此而以。
+
+既然Event是最基本的单元，那我们第一位就是需要用一个Python程序，将Binlog文件的Event信息解析出来：
+```
+# learn_bin2_binlog.py
+
+import struct
+from py_mysql_binlogserver.constants.EVENT_TYPE import event_type_name
+
+event_map = event_type_name()
+
+with open("mysql-bin.000009", mode="rb") as fr:
+    _file_header = fr.read(4)
+    if _file_header != bytes.fromhex("fe62696e"):
+        print("It is not a binlog file.")
+        exit()
+
+    '''
+    4              timestamp
+    1              event type
+    4              server-id
+    4              event-size
+    4              log pos
+    2              flags
+    '''
+    while True:
+        event_header = fr.read(19)
+        if len(event_header) == 0:
+            break
+        timestamp, event_type, server_id, event_size, log_pos, flags = struct.unpack('<IBIIIH', event_header)
+        print("Binlog Event[%s]: [%s] %s %s" % (timestamp,
+                                                event_type,
+                                                event_map.get(event_type), log_pos))
+        event_body = fr.read(event_size - 19)
+```
+输出：
+```
+Binlog Event[1570889546]: [15] FORMAT_DESCRIPTION_EVENT 123
+Binlog Event[1570889546]: [35] PREVIOUS_GTIDS_LOG_EVENT 190
+Binlog Event[1570889807]: [33] GTID_LOG_EVENT 251
+Binlog Event[1570889807]: [2] QUERY_EVENT 318
+Binlog Event[1570889807]: [19] TABLE_MAP_EVENT 361
+Binlog Event[1570889807]: [30] WRITE_ROWS_EVENT 402
+Binlog Event[1570889807]: [16] XID_EVENT 429
+Binlog Event[1570889813]: [33] GTID_LOG_EVENT 490
+Binlog Event[1570889813]: [2] QUERY_EVENT 557
+Binlog Event[1570889813]: [19] TABLE_MAP_EVENT 600
+Binlog Event[1570889813]: [30] WRITE_ROWS_EVENT 641
+Binlog Event[1570889813]: [16] XID_EVENT 668
+Binlog Event[1570889820]: [4] ROTATE_EVENT 711
+```
+是不是比想象中简单，如果你把基础篇的内容全部理解了，我相信上面这段代码不会难到你，相反如果你还不能理解上面这段代码，请移步回去多看几遍，多练几遍再回来。
+
 ## 异步Binlog dump协议
 ## 半同步Binlog dump协议
 

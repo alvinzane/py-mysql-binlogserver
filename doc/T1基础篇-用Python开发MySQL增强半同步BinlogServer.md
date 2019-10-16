@@ -224,8 +224,24 @@ b'\x06\xe4\xb8\xad\xe5\x9b\xbd'
 
 bytes转换为字符:
 ```
-## TODO
+# 仅取一例，其他的请自己动手试一试
+>>> struct.unpack("<7p", b'\x06\xe4\xb8\xad\xe5\x9b\xbd')[0].decode("utf8")
+'中国'
 ```
+需要特别说明的是，unpack返回的是元组，哪怕是只有一个元素，这样做的好处是，我们可以按照规则将多个数据的format写在一起，让代码更加简洁：
+```
+>>> struct.pack("<HBI6p",1, 19, 3306, b'alvin')
+b'\x01\x00\x13\xea\x0c\x00\x00\x05alvin'
+
+>>> struct.unpack("<HBI6p", b'\x01\x00\x13\xea\x0c\x00\x00\x05alvin')
+(1, 19, 3306, b'alvin')
+>>> id, no, port, name = struct.unpack("<HBI6p", b'\x01\x00\x13\xea\x0c\x00\x00\x05alvin')
+
+>>> id, no, port, name
+(1, 19, 3306, b'alvin')
+
+```
+这种写法会大量应用到后继的demo代码中，请不必多加练习，并细仔阅读官司文档。
 
 ## Python Socket编程
 简单说Socket编程，就是面向网络传输层的接口编程，系统通过IP地址和端口号建立起两台电脑之间网络连接，并提供两个最基础的通信接口发送数据和接收数据）供开发者调用，先来看一个最简单的客户端Socket例子：
