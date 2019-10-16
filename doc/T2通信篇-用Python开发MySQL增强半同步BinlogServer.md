@@ -6,12 +6,13 @@
 * 字符集与二进制的关系及其在Python中处理
 * 用struct来处理二进制的转换问题
 * Socket通信的基本编程方法
-在本节中，我们将结合这些内容进一步来了解如何使Python来和MySQL进行交互。
+
+在本节中，我们将结合这些内容进一步来了解如何使Python和MySQL进行交互。
 
 ## MySQL通信协议基础
 在Python中，使用socket.secv接收数据或send发送数据的都是二进制流对象Bytes，我们需要结合MySQL通信协议来逐字节解析其具体的含义。
 
-MySQL基础通信单位Packet，它由4个字节的 payload header + payload body组成，header由3个字节的payload长度（最大16M字节数）和1个字节的流水号组成，在读取一个Packet时，通常先读4个字节，解析出payload的长度和payload的序号，再根据payload的长度把余下的正文读取出来。
+MySQL基础通信单位Packet，它由payload header + payload body组成，header由3个字节的payload长度（最大16M字节数）和1个字节的流水号组成，在读取一个Packet时，通常先读4个字节，解析出payload的长度和payload的序号，再根据payload的长度把余下的正文读取出来。
 
 ```
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -365,9 +366,9 @@ mysql> show binlog events in 'mysql-bin.000009';
 +------------------+-----+----------------+-----------+-------------+--------------------------------------------------------------------+
 13 rows in set (0.00 sec)
 ```
-可以看出，binlog文件内容就是有很多的Event组成，一个完整的binlog应该是由Format_desc event开始，Rotate event结束，充当Binlog文件的元数据，中间Event才是真正和数据相关Event,每一个Event的格式都不尽相同，需要单独作解析。不过我们的BinlogServer并不关心具体的Event内容，只需要把Event作为一个接收，存储和发送的基本单元即可，简单说就是，把Master发送的Event按顺序存储起来，当有Slave change过来以后，再从指定位置把Event一个一个的发送给Slave，仅此而以。
+可以看出，binlog文件内容就是有很多的Event组成，一个完整的binlog应该是由Format_desc event开始，Rotate event结束，它们充当Binlog文件的元数据，中间Event才是真正和数据相关Event,每一个Event的格式都不尽相同，需要单独作解析。不过我们的BinlogServer并不关心具体的Event内容，只需要把Event作为一个接收，存储和发送的基本单元即可，简单说就是，把Master发送的Event按顺序存储起来，当有Slave change过来以后，再从指定位置把Event一个一个的发送给Slave，仅此而以。
 
-既然Event是最基本的单元，那我们第一位就是需要用一个Python程序，将Binlog文件的Event信息解析出来：
+每一个Event都有自己的Header, 描述了它的创建时间、类型、Server Id、长度、下一个Event位置和flags信息，结合Event的长度和下个Event位置信息，我们可以很容易地实现顺序扫描一个Binlog文件中的所有Event：
 ```
 # learn_bin2_binlog.py
 
@@ -383,6 +384,7 @@ with open("mysql-bin.000009", mode="rb") as fr:
         exit()
 
     '''
+    https://dev.mysql.com/doc/internals/en/binlog-event-header.html
     4              timestamp
     1              event type
     4              server-id
@@ -416,11 +418,16 @@ Binlog Event[1570889813]: [30] WRITE_ROWS_EVENT 641
 Binlog Event[1570889813]: [16] XID_EVENT 668
 Binlog Event[1570889820]: [4] ROTATE_EVENT 711
 ```
-是不是比想象中简单，如果你把基础篇的内容全部理解了，我相信上面这段代码不会难到你，相反如果你还不能理解上面这段代码，请移步回去多看几遍，多练几遍再回来。
+是不是比想象中简单，如果你把基础篇的内容全部理解了，我相信上面这段代码不会难到你，相反如果你还不能理解上面这段代码，请移步回去多看几遍，多练几遍再回来。更多的Binlog相关知识，请参考官方文档。
 
-## 异步Binlog dump协议
-## 半同步Binlog dump协议
+
+## 小结
+这一节我们把Socket通信的难关功破了，已经完成了和MySQL服务器进行握手，登陆和执行查询，近距离的接触了MySQL的通信协议，学会了如何运用Python struct进行简单的解包和封包，也简单分析了binlog的组成及使用Python来解析binlog文件，最重要的是学会了结合官方文档来解决我们的实际问题。
+
+下一节我们将在本节的基础上进入实战篇，利用Socket向Master发起Slave注册，发送BinlogDump指令，以获取Master上的Binlog Event并保存到本地文件中。
 
 
 - https://dev.mysql.com/doc/internals/en/mysql-packet.html
+- https://dev.mysql.com/doc/internals/en/binlog-file-header.html
+- https://dev.mysql.com/doc/internals/en/binlog-event-header.html
 - https://github.com/alvinzane/py-mysql-binlogserver/tree/master/py_mysql_binlogserver/_tutorial

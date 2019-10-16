@@ -13,6 +13,7 @@ with open("mysql-bin.000009", mode="rb") as fr:
         exit()
 
     '''
+    https://dev.mysql.com/doc/internals/en/binlog-event-header.html
     4              timestamp
     1              event type
     4              server-id

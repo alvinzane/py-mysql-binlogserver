@@ -7,9 +7,17 @@ from py_mysql_binlogserver._tutorial.learn_packet3_query import get_query, read_
 
 
 def get_dump_pos(log_file, log_pos, server_id):
+    """
+    https://dev.mysql.com/doc/internals/en/com-binlog-dump.html
+    1              [12] COM_BINLOG_DUMP
+    4              binlog-pos
+    2              flags
+    4              server-id
+    string[EOF]    binlog-filename
+    """
     COM_BINLOG_DUMP = 0x12
     buffer = struct.pack('<i', len(log_file) + 11) \
-              + struct.pack('<B', COM_BINLOG_DUMP)
+             + struct.pack('<B', COM_BINLOG_DUMP)
 
     buffer += struct.pack('<I', log_pos)
 
