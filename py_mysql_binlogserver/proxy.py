@@ -7,6 +7,7 @@ import socketserver
 import struct
 import sys
 import threading
+from _md5 import md5
 
 from py_mysql_binlogserver.packet.challenge import Challenge
 from py_mysql_binlogserver.packet.query import Query
@@ -71,6 +72,8 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
         self.upstream = conn
 
         challenge = Challenge.loadFromPacket(self.upstream.recv(10240))
+        logger.debug("== Greeting ==")
+        dump(challenge.toPacket())
 
         challenge1 = challenge.challenge1
         challenge2 = challenge.challenge2
@@ -93,9 +96,15 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
         response.removeCapabilityFlag(Flags.CLIENT_SSL)
         response.removeCapabilityFlag(Flags.CLIENT_LOCAL_FILES)
 
+        logger.debug("== Auth ==")
+        dump(response.toPacket())
+
         self.upstream.send(response.toPacket())
 
         _packet = self.upstream.recv(10240)
+
+        logger.debug("== Result ==")
+        dump(_packet)
         packetType = getType(_packet)
 
         if packetType == Flags.ERR:
@@ -172,10 +181,18 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
         challenge.sequenceId = 0
         return challenge
 
-    def dispatch_packet(self, packet):
+    def dispatch_packet(self, packet, sql=None):
         self.upstream.send(packet)
-
+        logger.debug(f"== Send packet ==")
         dump(packet)
+
+        if self.server.settings["dump_packet_to_file"] == "1" and sql:
+            dir_name = self.dir_name + "/dump/" + md5(sql.encode()).hexdigest()
+            if not os.path.isdir(dir_name):
+                os.mkdir(dir_name)
+            with open(dir_name + "/" + "sql.txt", "w") as sql_write:
+                sql_write.write(sql)
+
         while True:
             _header = self.upstream.recv(5)
             _length = struct.unpack("<I", (_header[0:3] + b"\x00"))[0]
@@ -183,8 +200,15 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
             _packetType = struct.unpack("<B", _header[4:])[0]
 
             _payload = self.upstream.recv(_length - 1)
-            dump(_header + _payload)
-            self.send_packet(_header + _payload)
+            _packet = _header + _payload
+            logger.debug(f"== Read packet of {_sequenceId} ==")
+            dump(_packet)
+            self.send_packet(_packet)
+
+            if self.server.settings["dump_packet_to_file"] == "1" and sql:
+                cap_file = dir_name + "/" + str(_sequenceId) + ".cap"
+                with open(cap_file, "wb") as wf:
+                    wf.write(_packet)
 
             if _packetType == Flags.EOF or _packetType == Flags.OK:
                 return
@@ -192,7 +216,7 @@ class ThreadedTCPRequestHandler(SocketServer.BaseRequestHandler):
     def handle_query(self, packet):
         qp = Query.loadFromPacket(packet)
         logger.info("query: " + qp.query)
-        self.dispatch_packet(packet)
+        self.dispatch_packet(packet, qp.query)
 
 
 class ThreadedTCPServer(SocketServer.ThreadingMixIn, SocketServer.TCPServer):
@@ -212,7 +236,8 @@ class MyProxy(object):
         server_thread = threading.Thread(target=server.serve_forever)
 
         server_thread.start()
-        logger.info("BinlogServer running in thread: %s %s %s" % (server_thread.name, self.host, self.port))
+        logger.info("MyProxy running in thread: %s %s %s" % (server_thread.name, self.host, self.port))
+        logger.info("Backend MySQL server: %s %s" % (self.settings["server_host"], self.settings["server_host"]))
 
 
 if __name__ == "__main__":
