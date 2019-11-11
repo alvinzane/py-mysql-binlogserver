@@ -6,7 +6,8 @@ from py_mysql_binlogserver.constants.EVENT_TYPE import event_type_name
 
 event_map = event_type_name()
 
-with open("mysql-bin.000009", mode="rb") as fr:
+print(event_map)
+with open("/Users/alvin/PycharmProjects/py-mysql-binlogserver/py_mysql_binlogserver/binlogs/mysql-bin.000013", mode="rb") as fr:
     _file_header = fr.read(4)
     if _file_header != bytes.fromhex("fe62696e"):
         print("It is not a binlog file.")

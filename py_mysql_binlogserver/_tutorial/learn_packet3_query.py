@@ -12,11 +12,11 @@ def read_packet(skt):
         _sequenceId = struct.unpack("<B", _header[3:4])[0]
         _packetType = struct.unpack("<B", _header[4:])[0]
 
-        if _packetType == 0xfe:     # EOF
-            break
-
         _payload = skt.recv(_length - 1)
         dump_packet(_header + _payload, f"read packet [{_sequenceId}]")
+
+        if _packetType in (0xfe, 0x00):     # EOF
+            break
 
 
 def get_query(sql):
@@ -33,21 +33,25 @@ def get_query(sql):
     return query
 
 
-if __name__ == "__main__":
-
+def get_conn(host, port, user, pwd):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect(("192.168.1.100", 3306))
+    s.connect((host, port))
 
     greeting = get_greeting(s)
-    username = 'repl'
-    password = 'repl1234'
+    username = user
+    password = pwd
     response = get_response(s, username, password, greeting["challenge1"], greeting["challenge2"])
     s.send(response)
     result = s.recv(1024)
+    return s
 
+
+if __name__ == "__main__":
+
+    conn = get_conn("192.168.1.100", 3306, "repl", "repl1234")
     sql = "select @@version_comment"
     query = get_query(sql)
     dump_packet(query, f"query packet:{sql}")
-    s.send(query)
+    conn.send(query)
 
-    read_packet(s)
+    read_packet(conn)

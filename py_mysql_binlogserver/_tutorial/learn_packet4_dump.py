@@ -1,9 +1,7 @@
-import socket
 import struct
 
-from py_mysql_binlogserver._tutorial.learn_packet1_greeting import get_greeting
-from py_mysql_binlogserver._tutorial.learn_packet2_auth import dump_packet, get_response
-from py_mysql_binlogserver._tutorial.learn_packet3_query import get_query, read_packet
+from py_mysql_binlogserver._tutorial.learn_packet2_auth import dump_packet
+from py_mysql_binlogserver._tutorial.learn_packet3_query import get_query, read_packet, get_conn
 
 
 def get_dump_pos(log_file, log_pos, server_id):
@@ -29,27 +27,33 @@ def get_dump_pos(log_file, log_pos, server_id):
     return buffer
 
 
-if __name__ == "__main__":
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.connect(("192.168.1.100", 3306))
-
-    greeting = get_greeting(s)
-    username = 'repl'
-    password = 'repl1234'
-    response = get_response(s, username, password, greeting["challenge1"], greeting["challenge2"])
-    s.send(response)
-    result = s.recv(1024)
-
-    sql = "select @@version_comment"
+def query(s, sql):
     query = get_query(sql)
     dump_packet(query, f"query packet:{sql}")
     s.send(query)
 
-    read_packet(s)
+    return read_packet(s)
 
-    log_file = "mysql-bin.000010"
+
+if __name__ == "__main__":
+
+    conn = get_conn("192.168.1.100", 3306, "repl", "repl1234")
+    query(conn, "select @@version_comment")
+
+    log_file = "mysql-bin.000012"
     log_pos = 4
     dump = get_dump_pos(log_file, log_pos, 3306100)
-    s.send(dump)
+    conn.send(dump)
 
-    read_packet(s)
+    print("=== Dump Binlog Event ===")
+    while True:
+        _header = conn.recv(5)
+        _length = struct.unpack("<I", (_header[0:3] + b"\x00"))[0]
+        _sequenceId = struct.unpack("<B", _header[3:4])[0]
+        _packetType = struct.unpack("<B", _header[4:])[0]
+
+        if _packetType == 0xfe:  # EOF
+            break
+
+        _payload = conn.recv(_length - 1)
+        dump_packet(_header + _payload, f"read packet [{_sequenceId}]")
