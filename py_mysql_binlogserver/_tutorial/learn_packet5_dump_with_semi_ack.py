@@ -24,7 +24,7 @@ def get_semi_ack(log_file, log_pos):
 
 if __name__ == "__main__":
     conn = get_conn("192.168.1.100", 3306, "repl", "repl1234")
-    query(conn, "select @@version_comment")
+    # query(conn, "select @@version_comment")
     # 启用增强半同步
     query(conn, "SET @rpl_semi_sync_slave=1")
 
@@ -32,7 +32,7 @@ if __name__ == "__main__":
     log_pos = 4
 
     dump = get_dump_pos(log_file, log_pos, 3306100)
-    dump_packet(dump, "Dump bin log:")
+    dump_packet(dump, "Dump Binlog Event:")
     conn.send(dump)
 
     for event in fetch_events(conn):
@@ -41,7 +41,7 @@ if __name__ == "__main__":
         print("Binlog Event[%s]: [%s] %s %s" % (timestamp,
                                                 event_type,
                                                 event_map.get(event_type), log_pos))
-        dump_packet(event, f"Read event packet:")
+        dump_packet(event[2:], f"Read event packet:")
 
         if event_type in (XID_EVENT, QUERY_EVENT):
             # TODO  从ROTATE_EVENT中解析当前的binlog文件名

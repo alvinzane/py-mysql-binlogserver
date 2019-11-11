@@ -38,9 +38,9 @@ def query(s, sql):
 if __name__ == "__main__":
 
     conn = get_conn("192.168.1.100", 3306, "repl", "repl1234")
-    query(conn, "select @@version_comment")
+    # query(conn, "select @@version_comment")
 
-    log_file = "mysql-bin.000012"
+    log_file = "mysql-bin.000015"
     log_pos = 4
     dump = get_dump_pos(log_file, log_pos, 3306100)
     conn.send(dump)

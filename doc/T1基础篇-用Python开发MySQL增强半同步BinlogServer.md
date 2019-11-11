@@ -12,7 +12,8 @@
 * 暂不支持级联复制模式
 * 仅在MySQL官方版5.7+下测试通过
 * 仅支持Python3, 不兼容Python2
-TODO
+
+TODO特性
 * 使用mysql client协议来管理binlogserver
 * 实现状态信息查询，满足监控需求
 
