@@ -109,7 +109,7 @@ $ hexdump -C /tmp/python_chr.txt
 ```
 ## Python二进制相关
 ### bytes对象
-bytes是Python3中新增一个处理二进制流的对象。从以下几种方式我们可以得到bytes对象：
+bytes是Python3中新增的一个处理二进制"流"的对象。从以下几种方式我们可以得到bytes对象：
 * 字符对象的encode方法
 * 二进制文件read方法
 * 网络socket的recv方法
@@ -279,7 +279,7 @@ while True:
     # 关闭链接
     conn.close()
 ```
-通过上面两个简单的例子，相信大家对Python的socket编程已经有一个清析的认识，那就是"相当的简单"，没有想象中那么复杂。
+通过上面两个简单的例子，相信大家对Python的socket编程已经有一个初步的认识，那就是"相当的简单"，没有想象中那么复杂。
 
 接下再来看一个多线程版的SocketServer, 可以通过telnet来实现一个网络计算器：
 ```
@@ -345,7 +345,7 @@ Calculator Server start at 127.0.0.1 : 9000
 ## 小结
 理解二进制，字符/编码，socket通信，以及如何使用Python来处理它们，是实现BinlogServer最重要的基础，由于篇幅问题，很多知识点只能点到为止，虽然很基础，但是还是需要自己的动手去实验，举一反三的多实践自己的想法，会对理解后面的文章大有帮助。
 
-只有会认真看文档的DBA才是好DBA，只会认真看代码的Programmer,一定不是好Programmer。代码一定要运行起来，Debug后才会产生价值，才会让你变成好Programmer. ^_^
+只有会认真看文档的DBA才是好DBA，只会认真看代码的Engineer,一定不是好Engineer。代码一定要运行起来，On Runtime才会有价值，才会让你变成好Engineer. ^_^
 
 最后，祝你编码快乐〜
 

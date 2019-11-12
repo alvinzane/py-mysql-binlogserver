@@ -12,7 +12,7 @@
 ## MySQL通信协议基础
 在Python中，使用socket.secv接收数据或send发送数据的都是二进制流对象Bytes，我们需要结合MySQL通信协议来逐字节解析其具体的含义。
 
-MySQL基础通信单位Packet，它由payload header + payload body组成，header由3个字节的payload长度（最大16M字节数）和1个字节的流水号组成，在读取一个Packet时，通常先读4个字节，解析出payload的长度和payload的序号，再根据payload的长度把余下的正文读取出来。
+MySQL基础通信单位Packet，它由header + payload组成，header由3个字节的payload长度（最大16M字节数）和1个字节的流水号组成，在读取一个Packet时，通常先读4个字节，解析出payload的长度和payload的序号，再根据payload的长度把余下的正文读取出来。
 
 ```
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

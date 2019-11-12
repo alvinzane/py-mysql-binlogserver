@@ -5,6 +5,21 @@
 
 目前我们已经能够用Socket和MySQL进行基本通信了，也能够处理Binlog文件的Event了，离我们的BinlogServer仅有一步之遥了，这一步就是通过Socket读取Binlog Event并保存到本地。
 
+这一篇之所以叫实战篇，就是希望你不要停在只看不练的阶段，这里再重提一下基础篇的要点：
+
+```
+只有会认真看文档的DBA才是好DBA，只会认真看代码的Engineer,一定不是好Engineer。代码一定要运行起来，On Runtime才会有价值，才会让你变成好Engineer. ^_^
+```
+
+在这面在分享一个快速提高Python Coding的方法：
+- Re-inventing the wheel
+
+从产品设计和生产上说，要避免重复造轮子，但是学习方法中，重复造轮子是最好的方式，没有之一。
+
+把py-mysql-binlogserver就是一个现成的轮子，并配备了完整入门教程，剩下就事情就是需要你去"搬砖"了，一行一行的搬到自己的项目或目录中（不一定要照抄，最后是在理解的基础上，用变通的方式来实现），达到相同的效果，相信用这种方式你很快就能学到很多东西。
+
+
+
 ## 学习使用tcpdump和Wireshark
 抓包工具组合tcpdump和Wireshark对特别重要工具对我们非常有帮助，它对程序的分析和排错起到最重要的作用。在实现BinlogServer之前，必须要先用一个正常的复制环境中dump出一个正常无误的数据包进行参考，当自己的程序出现问题，则可以一个包一个包的进行对比，有时甚至要一个字节一个字节对行对比，方能最快的找出程序的问题。
 
@@ -50,7 +65,7 @@ Command: Send Binlog GTID (30)
 可以发现，除了Command: Register Slave 和 Command: Register Slave 外，其它Statement都是普通query,在上一节中我们都实现了。 其中发送Register Slave后，就可以在主库用show slave hosts进行查看了，发送Send Binlog GTID之后，Master就源源不断的把Binlog Event发送过来了。如果执行了SET @rpl_semi_sync_slave= 1后，Master将会启用半同步协议进行传输并等待从库发送ACK直到超时。
 
 ## 异步Binlog dump协议
-上面的抓包是一个标准的启动半同步复制的流程，有一些query不是必须的，接下来我们先模拟一个简单的Binlog dump流程：
+上面的抓包是一个标准的启动半同步复制的流程，有一些query不是必须的（如:验证Master状态，注册Slave,设置心跳值等），接下来我们先模拟一个最简单的Binlog dump流程：
 ```sql
 # learn_packet4_dump.py
 
@@ -101,7 +116,7 @@ if __name__ == "__main__":
         _payload = conn.recv(_length - 1)
         dump_packet(_header + _payload, f"read packet [{_sequenceId}]")
 ```
-一个简单Binlog dump进程就写好了，看一下输出：
+一个简单Binlog dump进程就写好了，为了简单化，它省略了所有的非必要动作，通过验证后得到连接后，直接向服务器发送Binlob dump指令，看一下输出：
 ```
 === Dump Binlog Event ===
 read packet [1]
