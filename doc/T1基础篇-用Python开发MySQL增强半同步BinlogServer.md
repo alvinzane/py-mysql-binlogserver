@@ -3,7 +3,9 @@
 ## 概述
   前不久知数堂吴老师在公开课上把MHA拉下神坛，是因为MHA无法从根本上解决丢数据的可能性，只是尝试性的去补偿未同步的数据。使用MySQL的半同步复制可以解决数据丢失的问题，但原生io_thread会破坏掉Master上的Binlog File的命名，对后继的运维造成不便，所以使用原生增强半同步+blackhole引擎做binlog备份的方案几乎没有人使用，而更多的公司则使用mysqldump命令来实现轻量的BinlogServer，不足的是官方mysqldump并不支持半同步复制，仍然会丢数据。
   
-  据我所知，Facebook,Google和国内的美团公司都有研发自己的BinlogServer，但是目前我没有找到一个开源的支持半同步的BinlogServer项目，于是就诞生了py-mysql-binlogserver这个项目。主要特性如下：
+  据我所知，Facebook,Google和国内的美团公司都有研发自己的BinlogServer，但是目前我没有找到一个开源的支持半同步的BinlogServer项目，于是就诞生了py-mysql-binlogserver这个项目。
+  
+主要特性如下：
 * 全Python标准模块开发，无第三方库依赖，减少学习成本
 * 独立Dumper进程，用于同步保存Binlog event
 * 支持半同步协议，数据零丢失

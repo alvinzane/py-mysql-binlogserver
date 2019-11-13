@@ -14,7 +14,7 @@ Requirements
 
 * MySQL Server -- one of the following:
 
-  - MySQL_ >= 5.7
+  - MySQL >= 5.7
 
 Installation
 ------------
