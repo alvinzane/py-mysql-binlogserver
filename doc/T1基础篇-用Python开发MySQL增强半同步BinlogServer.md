@@ -17,10 +17,84 @@ TODO特性
 * 使用mysql client协议来管理binlogserver
 * 实现状态信息查询，满足监控需求
 
+具体功能请到项目首页进行查看和下载体验。
+
 项目地址为：
 ```
 https://github.com/alvinzane/py-mysql-binlogserver
 ```
+
+目录结构：
+```
+py-mysql-binlogserver
+├── README.doc
+├── doc
+│   ├── T1基础篇-用Python开发MySQL增强半同步BinlogServer.md
+│   ├── T2通信篇-用Python开发MySQL增强半同步BinlogServer.md
+│   ├── T3实战篇-用Python开发MySQL增强半同步BinlogServer.md
+│   ├── T4架构篇-用Python开发MySQL增强半同步BinlogServer.md
+│   └── readme.md
+└── py_mysql_binlogserver
+    ├── __init__.py
+    ├── _playground                             # 练习场，随便玩
+    │   ├── __init__.py
+    │   ├── socket_client.py
+    │   ├── socket_client_semi-repl.py
+    │   └── test_slave.py
+    ├── _tutorial                               # 教程实例代码
+    │   ├── __init__.py
+    │   ├── learn_bin1_charset.py
+    │   ├── learn_bin2_binlog.py
+    │   ├── learn_packet1_greeting.py
+    │   ├── learn_packet2_auth.py
+    │   ├── learn_packet3_query.py
+    │   ├── learn_packet4_dump.py
+    │   ├── learn_packet4_dump2.py
+    │   ├── learn_packet5_dump_with_semi_ack.py
+    │   ├── learn_socket1_client.py
+    │   ├── learn_socket2_server.py
+    │   ├── learn_socket3_server_mulit_thread.py
+    │   └── learn_socket4_server_mulit_thread.py
+    ├── binlogs                                 # Binlog文件保存目录
+    │   ├── mysql-bin.000014
+    │   ├── mysql-bin.gtid.index
+    │   └── mysql-bin.index
+    ├── cap
+    ├── constants
+    │   ├── EVENT_TYPE.py
+    │   └── FIELD_TYPE.py
+    ├── dump
+    │   └── readme.md
+    ├── packet
+    │   ├── __init__.py
+    │   ├── binlog_event.py
+    │   ├── challenge.py
+    │   ├── dump_gtid.py
+    │   ├── dump_pos.py
+    │   ├── event_header.py
+    │   ├── gtid_event.py
+    │   ├── query.py
+    │   ├── response.py
+    │   ├── semiack.py
+    │   └── slave.py
+    ├── protocol
+    │   ├── Flags.py
+    │   ├── __init__.py
+    │   ├── err.py
+    │   ├── gtid.py
+    │   ├── ok.py
+    │   ├── packet.py
+    │   └── proto.py
+    └── tests                               # 单元测试
+    │   ├── __init__.py
+    │   └── test_packet.py
+    ├── proxy.py                            # 简单代理，用于观察和保存MySQL Packet
+    ├── server.py                           # 实现Master协议
+    ├── dumper.py                           # Binlog Dumper,相当于IO Thread
+    ├── example.conf                        # 配置文件
+    └─── example.py                         # 同时启动 Server&Dumper
+```
+
 
   假设你已经有了一定的Python编程基础，并且完全理解MySQL半同步复制的原理，接下来我们就一步一步走进实现BinlogServer的技术细节。
   
