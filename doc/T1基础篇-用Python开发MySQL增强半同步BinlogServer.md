@@ -104,7 +104,7 @@ py-mysql-binlogserver
   MySQL的Binlog文件是二进制的，MySQL在网络上传送的数据也是二进制的，所以我们先来复习一下二进制的一些基础知识。
   
 ### 数字的表示：
- 常用的数字可以用十进制，二进制和十六进制来表示。在计算机中，数据的运算、存储、传输最终都会用到二进制，但由于二进制不便于人类阅读（太长了），所以我们通常用一位十六进制来表示四个二进制，即2位十六制表示一个Byte(字节)。
+ 数字通常可以用十进制，二进制和十六进制来表示。在计算机中，数据的运算、存储、传输最终都会用到二进制，但由于二进制不便于人类阅读（太长了），所以我们通常用一位十六进制来表示四个bite的二进制，即2位十六制表示一个Byte(字节)。
 ```
 二进制     十六进制  十进制
 0000 0001    01      1
@@ -136,7 +136,7 @@ py-mysql-binlogserver
 >>> 0xffffffff
 4294967295
 ```
-以上均为无符号的数字，即全为正数，对于有符号的正负数，则最高位的1个bit 0和1分别表示正数和负数。对于1个byte的数字，实际就只有7bit表示实际的数字，范围为[-128，127].
+以上均为无符号的数字，即全为正数，对于有符号的正负数，则最高位的1个bit用0和1分别表示正数和负数。对于1个byte的数字，实际就只有7bit表示实际的数字，范围为[-128，127].
 
 ### 字符的表示
 在计算机中所有的数据最终都要转化为数字，而且是二进制的数字。字符也不例外，也需要用到一个"映射表"来完成字符的表示。这个"映射表"叫作字符集，ASCII是最早最基础的"单字节"字符集，它可以表示键盘上所有的可打印字符，如52个大小写字母及标点符号。
@@ -185,7 +185,7 @@ $ hexdump -C /tmp/python_chr.txt
 ```
 ## Python二进制相关
 ### bytes对象
-bytes是Python3中新增的一个处理二进制"流"的对象。从以下几种方式我们可以得到bytes对象：
+bytes是Python3中新增的一个处理二进制"流"的对象。可以下几种方式我们可以得到bytes对象：
 * 字符对象的encode方法
 * 二进制文件read方法
 * 网络socket的recv方法
@@ -204,9 +204,9 @@ b'a'
 b'\xe4\xb8\xad\xe5\x9b\xbd'
 ```
 
-可以把bytes看作是一个特殊的数组，由连续的字节(byte)组成，单字节最大数不能超过255，具有数组的切片，迭代等特性，它总是尝试以ASCII编码将数据转成可显示字符，超出ASCII可显示范围将使用\x打头的二位十六进制进行显示。
+可以把bytes看作是一个特殊的数组，由连续的字节(byte)组成，单字节最大数不能超过255，具有数组的切片，迭代等特性，它总是尝试以ASCII编码将数据转成可显示字符，超出ASCII可显示范围则使用\x打头的二位十六进制进行显示。
 
-bytes对象的本质是存的二进制数组，存放的是0-255的数字数组，它只有结合"字符集"才能转换正确的字符，或者要结合某种"协议"才能解读取具体的"含义"，这一点后面就会详细的讲到。
+bytes对象的本质是存的二进制数组，存放的是0-255的数字数组，它只有结合"字符集"才能转换正确的字符，或者要结合某种"协议"才能解读出具体的"含义"，这一点后面就会详细的讲到。
 
 再来一个例子, 打印GBK编码表：
 ```
@@ -359,6 +359,8 @@ while True:
 
 接下再来看一个多线程版的SocketServer, 可以通过telnet来实现一个网络计算器：
 ```
+# learn_socket3_server_mulit_thread.py
+
 import threading
 import socketserver
 
@@ -419,7 +421,7 @@ Calculator Server start at 127.0.0.1 : 9000
 ```
 
 ## 小结
-理解二进制，字符/编码，socket通信，以及如何使用Python来处理它们，是实现BinlogServer最重要的基础，由于篇幅问题，很多知识点只能点到为止，虽然很基础，但是还是需要自己的动手去实验，举一反三的多实践自己的想法，会对理解后面的文章大有帮助。
+理解二进制，字符/编码，socket通信，以及如何使用Python来处理它们，是实现BinlogServer最重要的基础，由于篇幅问题，很多知识点只能点到为止，虽然很基础，但是还是需要自己的动手去实验，举一反三地多实践自己的想法，会对理解后面的文章大有帮助。
 
 只有会认真看文档的DBA才是好DBA，只会认真看代码的Engineer,一定不是好Engineer。代码一定要运行起来，On Runtime才会有价值，才会让你变成好Engineer. ^_^
 
@@ -428,3 +430,41 @@ Calculator Server start at 127.0.0.1 : 9000
 ## 相关文档
 - https://docs.python.org/3/library/struct.html
 - https://docs.python.org/3/library/socketserver.html
+
+## 附：基于mysqlbinlog命令的BinlogServer简单实现
+
+```
+#!/bin/sh
+
+REMOTE_HOST={{host}}
+REMOTE_PORT={{mysql_port}}
+REMOTE_USER={{mysql_repl_user}}
+REMOTE_PASS={{mysql_repl_password}}
+
+BACKUP_BIN=/usr/local/mysql/bin/mysqlbinlog
+LOCAL_BACKUP_DIR=/data/backup/mysql/binlog_3306
+BACKUP_LOG=/data/backup/mysql/binlog_3306/backup_3306.log
+
+FIRST_BINLOG=mysql-bin.000001
+#time to wait before reconnecting after failure
+SLEEP_SECONDS=10
+
+##create local_backup_dir if necessary
+mkdir -p ${LOCAL_BACKUP_DIR}
+
+cd ${LOCAL_BACKUP_DIR}
+##  Function while loop ， After the connection is disconnected, wait for the specified time. ， Reconnect
+while :
+do
+    if [ `ls -A "${LOCAL_BACKUP_DIR}" |wc -l` -eq 0 ];then
+        LAST_FILE=${FIRST_BINLOG}
+    else
+        LAST_FILE=`ls -l ${LOCAL_BACKUP_DIR} | grep -v backuplog |tail -n 1 |awk '{print $9}'`
+    fi
+    
+    ${BACKUP_BIN} --raw --read-from-remote-server --stop-never --host=${REMOTE_HOST} --port=${REMOTE_PORT} --user=${REMOTE_USER} --password=${REMOTE_PASS} ${LAST_FILE}
+    echo "`date +"%Y/%m/%d %H:%M:%S"` mysqlbinlog Stop it ， Return code ：$?" | tee -a ${BACKUP_LOG}
+    echo "${SLEEP_SECONDS} After the second connect and continue to backup " | tee -a ${BACKUP_LOG}
+    sleep ${SLEEP_SECONDS}
+done
+```
