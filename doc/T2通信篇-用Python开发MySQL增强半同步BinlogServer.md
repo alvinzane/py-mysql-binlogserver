@@ -426,6 +426,7 @@ Binlog Event[1570889820]: [4] ROTATE_EVENT 711
 
 下一节我们将在本节的基础上进入实战篇，利用Socket向Master发起Slave注册，发送BinlogDump指令，以获取Master上的Binlog Event并保存到本地文件中。
 
+## 相关文档
 
 - https://dev.mysql.com/doc/internals/en/mysql-packet.html
 - https://dev.mysql.com/doc/internals/en/binlog-file-header.html
