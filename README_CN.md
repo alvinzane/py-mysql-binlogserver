@@ -1,9 +1,7 @@
 py-mysql-binlogserver
 =====================
 
-
-This package is a pure-Python MySQL BinlogServer which implemented mysql semi sync replication protocol, and it also supported a MySQL master protocol so that you can change master to the server when failover.
-
+这是一个纯Python标准库实现的MySQL BinlogServer, 可以从Master以半同步协议进行同步保存Binlog，保证数据不丢失，同时也支持Failover时Slave直接使用change master to 语句进行数据补偿。
 
 Requirements
 -------------
@@ -16,29 +14,51 @@ Requirements
 
   - MySQL >= 5.7
 
-Installation
-------------
-
+安装说明
+-------
 ```
-cd /opt
-git clone https://github.com/alvinzane/py-mysql-binlogserver.git
+$ cd /opt
+$ git clone https://github.com/alvinzane/py-mysql-binlogserver.git
 
+# 执行时，请使用绝对路径
+
+# 启动Dumper进程
+$ python3 /opt/py-mysql-binlogserver/py_mysql_binlogserver/dumper.py
+
+# 启动Server进程
+$ python3 /opt/py-mysql-binlogserver/py_mysql_binlogserver/server.py
+
+# 同时启动Dumper和Server进程
+$ python3 /opt/py-mysql-binlogserver/py_mysql_binlogserver/example.py
+
+# 常见错误：
+Traceback (most recent call last):
+  File "/opt/py-mysql-binlogserver/py_mysql_binlogserver/dumper.py", line 9, in <module>
+    from py_mysql_binlogserver.constants.EVENT_TYPE import (FORMAT_DESCRIPTION_EVENT,
+ModuleNotFoundError: No module named 'py_mysql_binlogserver'
+
+# 解决办法1：(Windows建议直接修改环境变量PYTHONPATH)
+export PYTHONPATH=$PYTHONPATH:/opt/py-mysql-binlogserver/
+
+# 解决办法2：
 cd /usr/lib/python3.6/site-packages/
-
 ln -s /opt/py-mysql-binlogserver/py_mysql_binlogserver/  py_mysql_binlogserver
 
-vim python3 /opt/py-mysql-binlogserver/py_mysql_binlogserver/example.conf
+# 解决办法3：
+cat > /usr/lib/python3.6/site-packages/binlogserver.pth  <<EOF
+/opt/py-mysql-binlogserver/
+EOF
 
-python3 /opt/py-mysql-binlogserver/py_mysql_binlogserver/example.py
 ```
 
-
-Documentation
+文档
 -------------
 
-[中文文档](../../tree/master/README_CN.md
+[T1基础篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T1基础篇-用Python开发MySQL增强半同步BinlogServer.md
+[T2通信篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T2通信篇-用Python开发MySQL增强半同步BinlogServer.md
+[T3实战篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T3实战篇-用Python开发MySQL增强半同步BinlogServer.md
 
-Example
+示例
 -------
 example.py
 ```python
@@ -73,8 +93,8 @@ if __name__ == "__main__":
 
 ```
 
-Connecting BinlogServer
-----------------------
+使用官方5.7版的Client进行连接
+--------------------------
 ```sql
 
 $ mysql -h127.0.0.1 -P3308 -urepl -p
@@ -109,11 +129,12 @@ mysql> select user();
 
 ```
 
-How to use
-----------
+如何使用
+-------
 
 Server list:
 ============
+正常搭建一个主从环境，并开启主库的增强半同步，BinlogServer和Slave同时作为Master的从库，不要启用BINLOG CHECKSUM。
 ```
 +--------------+-------------+
 | Host         | Role        |
@@ -126,8 +147,46 @@ Server list:
 +--------------+-------------+
 ```
 
+启动Binlog Server
+================
+
+```
+# 确认配置
+$ cat /opt/py-mysql-binlogserver/py_mysql_binlogserver/example.conf
+
+binlog_name = mysql-bin # 重点
+
+
+# 启动
+$ python3 /opt/py-mysql-binlogserver/py_mysql_binlogserver/example.py
+
+2019-10-12 22:09:17,272 INFO Start Binlog Dumper from 192.168.1.100: 3306
+2019-10-12 22:09:17,272 INFO BinlogServer running in thread: Thread-1 0.0.0.0 3307
+2019-10-12 22:09:17,280 INFO Dump binlog from mysql-bin.000008 at 190
+
+```
+
+Binlog directory：
+```
+$ ll binlogs/
+total 72
+-rw-r--r--  1 alvin  staff  2130 Oct 12 20:44 mysql-bin.000002
+-rw-r--r--  1 alvin  staff   472 Oct 12 20:44 mysql-bin.000003
+-rw-r--r--  1 alvin  staff   233 Oct 12 20:44 mysql-bin.000004
+-rw-r--r--  1 alvin  staff   472 Oct 12 20:44 mysql-bin.000005
+-rw-r--r--  1 alvin  staff   472 Oct 12 20:44 mysql-bin.000006
+-rw-r--r--  1 alvin  staff   950 Oct 12 20:44 mysql-bin.000007
+-rw-r--r--  1 alvin  staff   190 Oct 12 20:44 mysql-bin.000008
+-rw-r--r--  1 alvin  staff   342 Oct 12 20:44 mysql-bin.gtid.index
+-rw-r--r--  1 alvin  staff   119 Oct 12 20:44 mysql-bin.index
+```
+
+如果同步Binlog出错，可以手动制造一个mysql-bin.index，并写入实际的filename.
+
 Master:
 =======
+启动Binlog Server后，在主库确认有两个从库。
+
 ```
 mysql> show slave hosts;
 +-----------+------+------+-----------+--------------------------------------+
@@ -167,35 +226,11 @@ mysql> show slave status\G
 1 row in set (0.00 sec)
 ```
 
-BinlogServer:
-============
-Running log:
-```
-# python3 example.py
-2019-10-12 22:09:17,272 INFO Start Binlog Dumper from 192.168.1.100: 3306
-2019-10-12 22:09:17,272 INFO BinlogServer running in thread: Thread-1 0.0.0.0 3307
-2019-10-12 22:09:17,280 INFO Dump binlog from mysql-bin.000008 at 190
-```
-Binlog directory：
-```
-$ ll binlogs/
-total 72
--rw-r--r--  1 alvin  staff  2130 Oct 12 20:44 mysql-bin.000002
--rw-r--r--  1 alvin  staff   472 Oct 12 20:44 mysql-bin.000003
--rw-r--r--  1 alvin  staff   233 Oct 12 20:44 mysql-bin.000004
--rw-r--r--  1 alvin  staff   472 Oct 12 20:44 mysql-bin.000005
--rw-r--r--  1 alvin  staff   472 Oct 12 20:44 mysql-bin.000006
--rw-r--r--  1 alvin  staff   950 Oct 12 20:44 mysql-bin.000007
--rw-r--r--  1 alvin  staff   190 Oct 12 20:44 mysql-bin.000008
--rw-r--r--  1 alvin  staff   342 Oct 12 20:44 mysql-bin.gtid.index
--rw-r--r--  1 alvin  staff   119 Oct 12 20:44 mysql-bin.index
-```
-
 Testing
 =======
 
 ### Step 1:
-Make some data at Master.
+往主库写入一些数据，确保复制正常。
 ```
 # Master
 mysql> create database db3;
@@ -215,7 +250,7 @@ Query OK, 0 rows affected (0.03 sec)
 ```
 
 ### Step 2:
-Ensure Slave is running normally, then stop slave.
+确保从库有正常同步后，停掉Slave, 制造有未同步的数据的场景。
 ```
 # Slave
 mysql> use db3;
@@ -263,7 +298,7 @@ Query OK, 0 rows affected (0.00 sec)
 ```
 
 ### Step 3:
-Make new data at Master, ensure data was replicated to the BinlogServer only.
+主库继续产生新数据，由于从库已经停止复制，所有数据只会同步到Binlog Server上，制造主库有数据未同步到从库上。
 ```
 # Master
 mysql> insert into t3 select null,'zane';
@@ -295,7 +330,7 @@ mysql> show master status;
 ```
 
 ### Step 4:
-Change master to the BinlogServer, ensure that new data was replicated from the new Master.
+模拟切换场景，在从库上change master 到Binlog Server上，补偿未同步的数据。
 ```
 # Slave
 mysql> CHANGE MASTER TO  MASTER_HOST='192.168.1.1',MASTER_PORT=3307;
@@ -343,7 +378,7 @@ mysql> select * from t3;
 ```
 
 ### Step 5:
-Checking BinlogServer logs.
+检查 BinlogServer日志，查看事件。
 ```
 
 2019-10-12 22:09:17,272 INFO Start Binlog Dumper from 192.168.1.100: 3306
