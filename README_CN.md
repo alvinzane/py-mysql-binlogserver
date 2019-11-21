@@ -54,9 +54,10 @@ EOF
 文档
 -------------
 
-[T1基础篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T1基础篇-用Python开发MySQL增强半同步BinlogServer.md
-[T2通信篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T2通信篇-用Python开发MySQL增强半同步BinlogServer.md
-[T3实战篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T3实战篇-用Python开发MySQL增强半同步BinlogServer.md
+ - [T1基础篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T1基础篇-用Python开发MySQL增强半同步BinlogServer.md)
+ - [T2通信篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T2通信篇-用Python开发MySQL增强半同步BinlogServer.md)
+ - [T3实战篇-用Python开发MySQL增强半同步BinlogServer](../../tree/master/doc/T3实战篇-用Python开发MySQL增强半同步BinlogServer.md)
+
 
 示例
 -------

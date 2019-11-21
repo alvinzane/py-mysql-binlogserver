@@ -36,7 +36,7 @@ python3 /opt/py-mysql-binlogserver/py_mysql_binlogserver/example.py
 Documentation
 -------------
 
-[中文文档](../../tree/master/README_CN.md
+[中文文档](../../tree/master/README_CN.md)
 
 Example
 -------
