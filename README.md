@@ -1,6 +1,7 @@
 py-mysql-binlogserver
 =====================
-
+Katarina, I'am waiting for U here, U can search me by my id in wechat. :D
+zengywei#163.com
 
 This package is a pure-Python MySQL BinlogServer which implemented mysql semi sync replication protocol, and it also supported a MySQL master protocol so that you can change master to the server when failover.
 
